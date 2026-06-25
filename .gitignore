@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+# 环境变量（含密钥，绝不进 git；.env.example 模板保留在仓库）
+.env
+.env.local
+.env.*.local
+backend/.env
+!.env.example
+!**/.env.example
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+backend/data/raw/*
+!backend/data/raw/.gitkeep

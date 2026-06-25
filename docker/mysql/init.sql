@@ -1,0 +1,74 @@
+-- 计算机学院智能问答系统 — MySQL 初始化脚本
+-- 父块全文 + FAQ 规则 + FAQ 别名
+
+USE rag_school;
+
+-- ---------------------------------------------------------------------------
+-- 父块表（全文存储，检索聚合后展示 / FAQ 直出）
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS parent_chunk (
+    parent_chunk_id   VARCHAR(64)  NOT NULL PRIMARY KEY COMMENT '父块唯一 ID',
+    content           MEDIUMTEXT   NOT NULL COMMENT '父块全文',
+    doc_id            VARCHAR(64)  NOT NULL COMMENT '来源文档 ID',
+    kb_id             VARCHAR(64)  NOT NULL DEFAULT 'kb_cs_college' COMMENT '知识库 ID',
+    chunk_index       INT          NOT NULL DEFAULT 0 COMMENT '文档内序号',
+    title             VARCHAR(512) NULL COMMENT '段落/章节标题',
+    metadata          JSON         NULL COMMENT '扩展元数据',
+    created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FULLTEXT INDEX ft_content (content) WITH PARSER ngram
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='父块全文表';
+
+-- ---------------------------------------------------------------------------
+-- FAQ 规则表
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS faq_rule (
+    faq_id                    VARCHAR(64)  NOT NULL PRIMARY KEY COMMENT 'FAQ 规则 ID',
+    standard_question         VARCHAR(512) NOT NULL COMMENT '标准问法',
+    target_parent_chunk_ids   JSON         NOT NULL COMMENT '命中后关联的 parent_chunk_id 列表',
+    answer_mode               ENUM('llm_generate', 'template', 'parent_chunk_direct')
+                              NOT NULL DEFAULT 'parent_chunk_direct' COMMENT '回答模式',
+    template_answer           TEXT         NULL COMMENT 'template 模式下的固定回答',
+    priority                  INT          NOT NULL DEFAULT 0 COMMENT '优先级，越大越优先',
+    enabled                   TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否启用',
+    created_at                TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='FAQ 规则表';
+
+-- ---------------------------------------------------------------------------
+-- FAQ 别名表
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS faq_alias (
+    alias_id      BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    faq_id        VARCHAR(64)  NOT NULL COMMENT '关联 faq_rule.faq_id',
+    alias_text    VARCHAR(512) NOT NULL COMMENT '别名/变体问法',
+    match_type    ENUM('exact', 'contains', 'regex')
+                  NOT NULL DEFAULT 'contains' COMMENT '匹配方式',
+    enabled       TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_faq_id (faq_id),
+    INDEX idx_alias (alias_text(191)),
+    CONSTRAINT fk_faq_alias_rule FOREIGN KEY (faq_id) REFERENCES faq_rule(faq_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='FAQ 别名表';
+
+-- ---------------------------------------------------------------------------
+-- 示例数据（联调用）
+-- ---------------------------------------------------------------------------
+INSERT INTO parent_chunk (parent_chunk_id, content, doc_id, kb_id, chunk_index, title) VALUES
+('pc_office_hours', '计算机学院办公室工作时间为周一至周五 8:30-17:00，中午 12:00-13:30 休息。', 'doc_admin_guide', 'kb_cs_college', 0, '办公时间'),
+('pc_counselor_contact', '本科生辅导员联系方式请参见学院官网「学生工作」栏目，或拨打学院办公室总机转接。', 'doc_student_affairs', 'kb_cs_college', 0, '辅导员联系'),
+('pc_graduation_req', '计算机专业毕业学分要求为 160 学分，其中必修 98 学分，选修不少于 42 学分。', 'doc_curriculum', 'kb_cs_college', 0, '毕业学分');
+
+INSERT INTO faq_rule (faq_id, standard_question, target_parent_chunk_ids, answer_mode, priority) VALUES
+('faq_001', '计算机学院办公时间是什么', '["pc_office_hours"]', 'parent_chunk_direct', 10),
+('faq_002', '如何联系辅导员', '["pc_counselor_contact"]', 'template', 10);
+
+INSERT INTO faq_alias (faq_id, alias_text, match_type) VALUES
+('faq_001', '上班时间', 'contains'),
+('faq_001', '几点上班', 'contains'),
+('faq_002', '辅导员电话', 'contains'),
+('faq_002', '辅导员联系方式', 'contains');

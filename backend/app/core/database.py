@@ -10,12 +10,16 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+
+
+class Base(DeclarativeBase):
+    """SQLAlchemy ORM base. Tables are created by SQL scripts, not on app startup."""
 
 
 def get_engine() -> Engine:

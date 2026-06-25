@@ -2,37 +2,61 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
+from app.core.chat_history import load_recent_history, save_chat_turn
+from app.core.config import get_settings
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
 from app.workflow.llm_client import stream_text
-from app.workflow.state import AgentState, HistoryMessage
+from app.workflow.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 def _build_initial_state(body: ChatRequest) -> AgentState:
-    history: list[HistoryMessage] = [
-        {"role": m.role, "content": m.content} for m in body.history
-    ]
+    settings = get_settings()
+    session_id = body.session_id or new_session_id()
+    history = load_recent_history(
+        session_id=session_id,
+        limit=settings.chat_history_window,
+    )
     return {
         "question": body.question,
         "history": history,
-        "session_id": body.session_id or new_session_id(),
+        "session_id": session_id,
         "debug_trace": [],
     }
+
+
+def _persist_completed_turn(state: AgentState) -> None:
+    """Best-effort archive; failures must not affect the user-facing answer."""
+    try:
+        save_chat_turn(
+            session_id=state.get("session_id", ""),
+            question=state.get("question", ""),
+            answer=state.get("answer", ""),
+            query_intent=state.get("query_intent"),
+            citations=state.get("citations", []),
+            debug_trace=state.get("debug_trace", []),
+        )
+    except Exception:
+        logger.exception("Failed to persist chat turn")
 
 
 @router.post("", response_model=ChatResponse)
 async def chat_sync(body: ChatRequest):
     """同步问答（调试用）。"""
     state = run_rag_pipeline(_build_initial_state(body))
+    _persist_completed_turn(state)
     return ChatResponse(
         answer=state.get("answer", ""),
         citations=[
@@ -83,6 +107,10 @@ async def chat_stream(body: ChatRequest):
             ensure_ascii=False,
         )
         yield f"data: {done_payload}\n\n"
+
+        # Only archive after the complete SSE stream reaches done.
+        # If the client disconnects earlier, the generator is cancelled and this turn is not stored.
+        asyncio.create_task(asyncio.to_thread(_persist_completed_turn, state))
 
     return StreamingResponse(
         event_generator(),

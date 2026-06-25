@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_name: str = "计算机学院智能问答系统"
     debug: bool = False
     api_prefix: str = "/api"
+    chat_history_window: int = Field(default=4, ge=0, description="按 session_id 加载的最近对话轮数")
 
     # ----- MySQL（凭证见 backend/.env；与根目录 docker .env 中 MYSQL_* 对齐）-----
     mysql_host: str = "127.0.0.1"

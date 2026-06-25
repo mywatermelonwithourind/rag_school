@@ -36,11 +36,6 @@ export default function ChatInterface() {
         streaming: true,
       };
 
-      const history = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setInput("");
       setLoading(true);
@@ -54,7 +49,6 @@ export default function ChatInterface() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             question,
-            history,
             session_id: sessionId,
           }),
           signal: abortRef.current.signal,
@@ -134,7 +128,7 @@ export default function ChatInterface() {
         setLoading(false);
       }
     },
-    [input, loading, messages, sessionId]
+    [input, loading, sessionId]
   );
 
   return (

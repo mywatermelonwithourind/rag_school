@@ -23,14 +23,14 @@
 - **成功**：HTTP `200`，响应体为 JSON（SSE 接口除外，见下文）。
 - **请求体验证失败**：HTTP `422`，FastAPI 标准 `detail` 数组（字段名、错误类型、提示信息）。当前路由**未定义**自定义错误码或统一 `{ "code": ..., "message": ... }` 包装。
 - **服务端异常**：HTTP `500`，FastAPI 默认错误体。**TODO(api/E)**：是否需要统一错误格式待定。
-- **AgentState 内部字段**（如 `query_intent`、`sources`、`retrieval_sufficient`、`faq_match`、`error`）**不**通过 HTTP 响应暴露；API 层仅映射 `answer`、`citations`、`session_id`、`debug_trace`（见各接口说明）。
+- **AgentState 内部字段**（如 `history`、`query_intent`、`sources`、`retrieval_sufficient`、`faq_match`、`error`）**不**通过 HTTP 响应暴露；API 层仅映射 `answer`、`citations`、`session_id`、`debug_trace`（见各接口说明）。
 
 ### 错误码约定（当前实现）
 
 | HTTP 状态 | 场景 | 响应体（当前） |
 |-----------|------|----------------|
 | `200` | 成功 | 见各接口 |
-| `422` | `ChatRequest` 校验失败（如 `question` 为空、超长、`history[].role` 非法） | FastAPI `{"detail":[...]}` |
+| `422` | `ChatRequest` 校验失败（如 `question` 为空、超长） | FastAPI `{"detail":[...]}` |
 | `500` | LangGraph / 未捕获异常 | FastAPI 默认 `Internal Server Error` |
 
 **TODO(api/E)**：业务错误码（如检索超时、LLM 不可用）尚未定义；`AgentState.error` 字段存在，计划经 SSE `error` 事件暴露（当前不发送，见 [事件：`error`](#事件error预留)）。
@@ -87,46 +87,24 @@
 | 字段 | 类型 | 必填 | 约束 | 含义 |
 |------|------|------|------|------|
 | `question` | `string` | 是 | 长度 1–2000 | 用户**当前轮**问题 |
-| `history` | `array` | 否 | 默认 `[]` | 多轮对话历史，**不含**当前 `question` |
-| `history[].role` | `string` | 是（数组非空时） | 仅 `"user"` 或 `"assistant"` | 发言角色 |
-| `history[].content` | `string` | 是（数组非空时） | — | 该轮消息正文 |
-| `session_id` | `string \| null` | 否 | 默认 `null` | 会话 ID；为 `null` 时后端生成 UUID |
+| `session_id` | `string \| null` | 否 | 默认 `null` | 会话 ID；上下文加载钥匙。为 `null` 时后端生成 UUID |
 
-#### `history` 与 `session_id` 的实际行为（与代码一致）
+#### `session_id` 与历史加载（与代码一致）
 
-- **`history` 由调用方（前端）在请求体中传入**；后端 `_build_initial_state()` **不会**根据 `session_id` 从数据库或缓存加载历史。
-- **`session_id` 用途**：写入 `AgentState.session_id`，用于日志与会话标识；**不参与**历史加载。
-- 多轮对话时，前端须自行维护完整 `history` 并在每次请求中带上（见 `frontend/src/components/ChatInterface.tsx`：从本地 `messages` 映射为 `{ role, content }` 数组）。
-- **TODO(api/E)**：若未来改为服务端按 `session_id` 持久化/加载 history，需新增存储接口并变更本契约。
-
-#### `history` 截断约定（当前 **TODO / 未实现**）
-
-| 项 | 当前代码行为 | 代码位置 |
-|----|--------------|----------|
-| 后端是否截断 `history` | **否**。`_build_initial_state()` 原样映射 `body.history`，无轮数/字数上限 | `app/api/routes/chat.py` |
-| `history` 轮数上限 | **无**（Pydantic 未限制数组长度） | `app/api/schemas.py` |
-| `history[].content` 单条长度上限 | **无**（仅要求非空字符串） | `app/api/schemas.py` |
-| 前端是否截断 | **否**。`ChatInterface.tsx` 将**全部** `messages` 写入 `history` | `frontend/src/components/ChatInterface.tsx` |
-
-**截断责任（当前）**：在前端。后端不截断，history 无限增长会导致请求体变大、LLM prompt 超上下文、延迟上升。
-
-**建议上限（TODO，供前端/workflow 联调时采纳，代码尚未实现）**：
-
-- 窗口化保留**最近 N 轮**（一问一答算 2 条消息），例如 **最近 4 轮（8 条）**；
-- 或限制 `history` 总字符数 / 估算 token，例如 **约 1800 tokens**（与常见 LLM 上下文窗口预留匹配）；
-- 截断时优先丢弃最早的消息，保留最近用户意图。
-
-**TODO(api/E / workflow/D)**：是否在 API 层或 preprocess 节点增加服务端截断/校验；若增加需写入本文档并通知前端。
+- 前端**不再传 `history`**。请求体只包含当前 `question` 和可选 `session_id`。
+- `session_id` 是后端加载上下文的钥匙：首轮传 `null` 或省略，后端生成 UUID 并在响应中返回；后续每轮前端回传同一个 `session_id`。
+- 后端 `_build_initial_state()` 会按 `session_id` 从 `chat_conversation` 表加载最近 N 轮已完成问答，展开为 `AgentState.history`：
+  - 每条记录展开为 `user: question` 和 `assistant: answer` 两条消息。
+  - `query_intent`、`citations`、`debug_trace` 仅用于存档分析，不进入 LLM 上下文。
+- N 由 `RAG_CHAT_HISTORY_WINDOW` 配置，默认 `4` 轮（最多 8 条 history message）。
+- 时序固定为：**先读旧历史 → 再跑 LangGraph → 最后写入本轮 Q&A**。当前这句问题不会混进本轮读取到的历史里。
+- 写入本轮存档失败只记录日志，不影响接口返回答案。
 
 #### 请求示例
 
 ```json
 {
   "question": "计算机学院办公时间是什么",
-  "history": [
-    { "role": "user", "content": "你好" },
-    { "role": "assistant", "content": "您好，有什么可以帮您？" }
-  ],
   "session_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
@@ -136,7 +114,7 @@
 ```json
 {
   "question": "毕业学分要求是多少",
-  "history": []
+  "session_id": null
 }
 ```
 
@@ -182,7 +160,6 @@
 |------|------|------|
 | `question` 缺失或为空 | `422` | Pydantic 校验 |
 | `question` 超过 2000 字 | `422` | Pydantic 校验 |
-| `history[].role` 非 `user`/`assistant` | `422` | 正则校验失败 |
 | 流水线内部异常 | `500` | 无自定义错误体 |
 
 ---
@@ -196,7 +173,7 @@ SSE（Server-Sent Events）流式问答。前端生产路径。
 ### 请求体
 
 与 [POST `/api/chat`](#post-apichat) **完全相同**（`ChatRequest`）。  
-`history` / `session_id` 语义一致：**history 前端传，后端不按 session_id 加载**。
+`session_id` 语义一致：前端不传 history，后端按 `session_id` 加载最近 N 轮历史。
 
 ### 响应
 
@@ -216,10 +193,12 @@ data: <JSON 字符串>\n\n
 
 ### 当前实现时序（桩阶段，与代码一致）
 
-1. 服务端**先同步跑完** `run_rag_pipeline()`，得到完整 `answer`、`citations` 等。
-2. 再调用 `generate_answer_stream()` 将已有答案**逐字符**推送为 `token` 事件（**TODO(workflow/D)**：改为 LLM 真流式后，token 时机将变为生成过程中实时推送）。
-3. 若有 `citations`，推送一条 `citations` 事件。
-4. 最后**必定**推送一条 `done` 事件。
+1. 服务端先按 `session_id` 从库加载最近 N 轮历史，构造 `AgentState.history`。
+2. 服务端同步跑完 `run_rag_pipeline()`，得到完整 `answer`、`citations` 等。
+3. 将 `state.answer` **逐字符**推送为 `token` 事件（展示层流式；**唯一答案来源是 answer 节点产出的 `state.answer`**）。
+4. 若有 `citations`，推送一条 `citations` 事件。
+5. 最后**必定**推送一条 `done` 事件。
+6. `done` 发出后才异步写入本轮 Q&A 到 `chat_conversation`；如果客户端中途断开导致流未完整结束，本轮不存档，避免残缺答案进入历史。
 
 （真流式上线后）若流中途出错，**计划**在 `done` 之前推送 `error` 事件，见 [事件：`error`](#事件error预留)）。
 
@@ -231,7 +210,7 @@ data: <JSON 字符串>\n\n
 
 | 项 | 说明 |
 |----|------|
-| **发出时机** | 流水线完成后，按 `generate_answer_stream()` 产出顺序逐个发出（当前为逐字符） |
+| **发出时机** | 流水线完成后，按 `state.answer` 顺序逐个发出（当前为逐字符） |
 | **`data` 格式** | JSON 对象，**不是**纯文本 |
 
 ```json
@@ -400,7 +379,7 @@ data: {"type":"done","session_id":"...","debug_trace":[...],"answer":"[MOCK LLM 
 
 ### HistoryMessage
 
-请求侧：`ChatRequest.history[]`；内部：`AgentState.history`。
+仅内部使用：`AgentState.history`。前端不再通过请求体传 history；API 层按 `session_id` 从 `chat_conversation` 表加载最近 N 轮问答，并展开为该结构。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -457,7 +436,7 @@ curl -s http://127.0.0.1:8000/api/health
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d "{\"question\":\"计算机学院办公时间是什么\",\"history\":[]}"
+  -d "{\"question\":\"计算机学院办公时间是什么\",\"session_id\":null}"
 ```
 
 ### curl — SSE 流式（原始输出）
@@ -465,7 +444,7 @@ curl -s -X POST http://127.0.0.1:8000/api/chat \
 ```bash
 curl -N -X POST http://127.0.0.1:8000/api/chat/stream \
   -H "Content-Type: application/json" \
-  -d "{\"question\":\"你好\",\"history\":[],\"session_id\":null}"
+  -d "{\"question\":\"你好\",\"session_id\":null}"
 ```
 
 ### 前端 fetch — SSE（摘自 `ChatInterface.tsx` 逻辑）
@@ -478,10 +457,6 @@ const res = await fetch(`${API_BASE}/api/chat/stream`, {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     question: "毕业学分要求是多少",
-    history: [
-      { role: "user", content: "你好" },
-      { role: "assistant", content: "您好！" },
-    ],
     session_id: sessionId, // 首条可为 null，后续用 done 返回的 session_id
   }),
 });
@@ -523,14 +498,14 @@ while (true) {
 
 **TODO(api/E)**：是否在 API 层 `strip` 后再校验非空（拒绝纯空白）。
 
-#### `history` 空 vs 不传
+#### history 来源
 
-| 输入 | 实际行为 |
-|------|----------|
-| 不传 `history` 字段 | 等同 `history: []`（`Field(default_factory=list)`） |
-| `"history": []` | 空历史，首问场景 |
-
-两者行为**一致**。代码位置：`app/api/schemas.py`、`chat.py` `_build_initial_state()`。
+| 项 | 实际行为 |
+|----|----------|
+| 请求体是否包含 `history` | **不包含**。`ChatRequest` 只有 `question` 与 `session_id` |
+| 后端如何得到历史 | 按 `session_id` 查询 `chat_conversation` 最近 N 轮，并展开为 `AgentState.history` |
+| 首轮没有历史 | `session_id: null` 时后端生成新 UUID，查询结果为空 |
+| 当前问题是否进入本轮 history | **不会**。当前问题在链路跑完后才写入数据库，供后续请求使用 |
 
 #### `sources` 为空时 `answer` 如何兜底
 
@@ -559,16 +534,18 @@ while (true) {
 
 ```
 首次请求 session_id: null
-    → _build_initial_state: body.session_id or new_session_id()  （app/api/routes/chat.py）
-    → 流水线使用生成的 UUID
+    → _build_initial_state: body.session_id or new_session_id()
+    → 按 session_id 加载最近 N 轮历史（新 UUID 通常为空）
+    → 流水线使用该 session_id
     → done / ChatResponse 返回 session_id
     → 前端 setSessionId，后续请求回传同一值
+    → 完成本轮后写入 chat_conversation，供下一轮加载
 ```
 
 | 问题 | 实际行为 |
 |------|----------|
-| 后端是否存储 session | **否**。无 session 表/缓存 |
-| 传入后端「没见过」的 `session_id` | **照常处理**。仅作为 `AgentState.session_id` 传递；history 仍完全依赖请求体，**不会**因 unknown id 报错或拒收 |
+| 后端是否存储 session | 不单独建 session 表；上下文来自 `chat_conversation.session_id` 下的历史问答 |
+| 传入后端「没见过」的 `session_id` | 照常处理，历史为空；本轮完成后会写入该 session_id |
 | 传 `null` vs 省略字段 | 等价，均触发后端新生成 UUID |
 
 ---
@@ -578,16 +555,12 @@ while (true) {
 | 字段 | 约束 | 超出/非法 |
 |------|------|-----------|
 | `question` | 1–2000 字符 | `422` |
-| `history` 数组长度 | **无上限** | 当前不报错（**TODO**：见 [history 截断约定](#history-截断约定当前-todo--未实现)） |
-| `history[].content` | 非空 string，**无 max_length** | 当前不报错 |
-| `history[].role` | 正则 `^(user\|assistant)$` | `422` |
 | `session_id` | `string \| null`，**无格式校验** | 任意字符串均可 |
 
 #### `null` vs 字段缺失
 
 | 字段 | 缺失 | 显式 `null` |
 |------|------|-------------|
-| `history` | `[]` | JSON 中写 `"history": null` → **422**（期望 array） |
 | `session_id` | 后端生成 UUID | 等同缺失，后端生成 UUID |
 | `question` | `422` | `null` → **422**（期望 string） |
 
@@ -596,7 +569,7 @@ while (true) {
 ### answer 与 token 的一致性
 
 - **`done.answer` 为权威完整答案**；流式 `token` 累积仅用于过程展示。
-- 桩阶段两者应一致（token 来自对同一 `answer` 的逐字拆分，`chat.py` + `llm_client.generate_answer_stream`）。
+- 桩阶段两者应一致（token 来自对同一 `state.answer` 的逐字拆分，`chat.py` + `llm_client.stream_text`）。
 - 真流式或网络丢包时，**可能出现** token 拼接与 `done.answer` 不一致；**前端应以 `done.answer` 为准覆盖**（`ChatInterface.tsx` 第 99–101 行已实现）。**这不是 bug**，是刻意设计。
 - 若只收到 token 从未收到 `done`（断流），前端当前保留已累积内容或显示网络错误；**TODO(前端/E)**：超时与 `error` 事件策略。
 
@@ -634,12 +607,12 @@ while (true) {
 
 | 项 | 实际行为 |
 |----|----------|
-| 同一 `session_id` 并发两请求 | 后端**无锁**、无排队；两次独立 `run_rag_pipeline()`，互不影响，**可能**交叉返回 |
-| 后端 session 状态 | **无**服务端会话状态 |
+| 同一 `session_id` 并发两请求 | 后端**无锁**、无排队；两次请求都会先读当时库中已完成历史，可能读不到对方尚未写入的本轮结果 |
+| 后端 session 状态 | 无单独 session 表；按 `chat_conversation` 中已完成 Q&A 恢复上下文 |
 | 前端防重复 | `loading === true` 时禁用输入/发送（`ChatInterface.tsx`） |
-| 新请求 vs 进行中的流 | 发送新消息前 `abortRef.current?.abort()` **仅取消客户端读流**；若上一请求已在服务端跑完 pipeline，abort **不能**撤销服务端计算 |
+| 新请求 vs 进行中的流 | 前端 loading 禁止发送下一条；若用户/网络中断导致 SSE 未完整走到 `done` 后的存档点，本轮不写入历史 |
 
-**建议（TODO，前端/E）**：流式进行中禁止发送下一条（当前已通过 `loading` 基本实现）；必要时显示「请等待当前回复完成」。
+为避免同一 `session_id` 并发请求读到不一致历史，前端应保持“上一条未结束时不可发送下一条”（当前已通过 `loading` 实现）。
 
 ---
 
@@ -662,3 +635,4 @@ while (true) {
 |------|------|
 | 2026-06-25 | 初版，对齐骨架代码实现 |
 | 2026-06-25 | 补充 SSE `error` 预留、history 截断约定、「边界与约定」一节 |
+| 2026-06-25 | 对话历史改为后端按 `session_id` 从数据库加载，前端不再传 `history` |

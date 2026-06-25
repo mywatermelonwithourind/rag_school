@@ -27,19 +27,17 @@ services:
       ETCD_SNAPSHOT_COUNT: "50000"
     volumes:
       - etcd_data:/etcd
-    # advertise 必须用服务名，否则 milvus 通过 etcd:2379 连接会失败
     command: >
       etcd
-      -advertise-client-urls=http://etcd:2379
-      -listen-client-urls=http://0.0.0.0:2379
-      -listen-peer-urls=http://0.0.0.0:2380
-      -initial-advertise-peer-urls=http://etcd:2380
-      --data-dir /etcd
+      --advertise-client-urls=http://etcd:2379
+      --listen-client-urls=http://0.0.0.0:2379
+      --data-dir=/etcd
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      test:
+        ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://localhost:2379"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   minio:
     container_name: rag-minio

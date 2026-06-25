@@ -11,11 +11,12 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
-from app.core.chat_history import load_recent_history, save_chat_turn
-from app.core.config import get_settings
+from app.core.chat_history import save_chat_turn
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
-from app.workflow.llm_client import stream_text
+from app.workflow.llm_client import generate_answer_stream
+from app.workflow.nodes.preprocess import preprocess_node
+from app.workflow.nodes.query_route import query_route_node
 from app.workflow.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -23,15 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 def _build_initial_state(body: ChatRequest) -> AgentState:
-    settings = get_settings()
     session_id = body.session_id or new_session_id()
-    history = load_recent_history(
-        session_id=session_id,
-        limit=settings.chat_history_window,
-    )
     return {
         "question": body.question,
-        "history": history,
+        # 最小闭环阶段只存档不读历史；多轮上下文加载后续再恢复。
+        "history": [],
         "session_id": session_id,
         "debug_trace": [],
     }
@@ -78,30 +75,32 @@ async def chat_stream(body: ChatRequest):
         data: {"type":"done","session_id":"..."}
     """
     initial = _build_initial_state(body)
-    state = run_rag_pipeline(initial)
+    # 最小闭环阶段：只跑预处理 + 固定 direct_answer 路由，跳过 FAQ / 检索。
+    routed_state = query_route_node(preprocess_node(initial))
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        answer = state.get("answer", "")
-        # 展示层流式：唯一答案来源是 answer 节点写入的 state["answer"]。
-        # TODO(workflow/D + api/E): answer 节点接真 LLM 流式后，可从图执行层透传 token，
-        # 但 done.answer 仍应以最终 state["answer"] 为权威值。
-        for token in stream_text(answer):
+        answer = ""
+        for token in generate_answer_stream(
+            question=routed_state.get("question", ""),
+            history=[],
+            sources=[],
+        ):
+            answer += token
             payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
 
-        citations = state.get("citations", [])
-        if citations:
-            cit_payload = json.dumps(
-                {"type": "citations", "content": citations},
-                ensure_ascii=False,
-            )
-            yield f"data: {cit_payload}\n\n"
+        final_state: AgentState = {
+            **routed_state,
+            "answer": answer,
+            "citations": [],
+            "debug_trace": [*routed_state.get("debug_trace", []), "answer:direct"],
+        }
 
         done_payload = json.dumps(
             {
                 "type": "done",
-                "session_id": state.get("session_id", ""),
-                "debug_trace": state.get("debug_trace", []),
+                "session_id": final_state.get("session_id", ""),
+                "debug_trace": final_state.get("debug_trace", []),
                 "answer": answer,
             },
             ensure_ascii=False,
@@ -110,7 +109,7 @@ async def chat_stream(body: ChatRequest):
 
         # Only archive after the complete SSE stream reaches done.
         # If the client disconnects earlier, the generator is cancelled and this turn is not stored.
-        asyncio.create_task(asyncio.to_thread(_persist_completed_turn, state))
+        asyncio.create_task(asyncio.to_thread(_persist_completed_turn, final_state))
 
     return StreamingResponse(
         event_generator(),

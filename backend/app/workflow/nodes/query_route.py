@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from app.core.config import get_settings
-from app.query_understanding.router import classify_intent
 from app.workflow.state import AgentState, RetrievalPlan
 
 
@@ -21,20 +20,12 @@ def query_route_node(state: AgentState) -> AgentState:
         - debug_trace: 追加 "query_route"
 
     负责成员: query_understanding 组
-    TODO(query_understanding/C): 用 LLM 或规则分类替换 mock classify_intent；
-        direct_answer 判定须保守，拿不准优先 rewrite（见 router.ROUTING_PROMPT_CONSTRAINTS）
+    TODO(query_understanding/C): 恢复真实路由时，再接回 FAQ 短路与 classify_intent；
+        当前最小闭环阶段强制 direct_answer，用于验证前后端 + LLM + 存库。
     """
     settings = get_settings()
-    question = state.get("normalized_question") or state.get("question", "")
-
-    if state.get("faq_short_circuit"):
-        intent = "direct_parent_chunk"
-    else:
-        intent = classify_intent(
-            question=question,
-            history=state.get("history", []),
-            session_context=state.get("session_context", {}),
-        )
+    # TODO(query_understanding/C): 最小闭环临时短路，之后恢复为真实 intent 分类。
+    intent = "direct_answer"
 
     plan: RetrievalPlan = {
         "top_k_vector": settings.top_k_vector,

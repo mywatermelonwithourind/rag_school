@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
-from app.workflow.llm_client import generate_answer_stream
+from app.workflow.llm_client import stream_text
 from app.workflow.state import AgentState, HistoryMessage
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -58,12 +58,10 @@ async def chat_stream(body: ChatRequest):
 
     async def event_generator() -> AsyncGenerator[str, None]:
         answer = state.get("answer", "")
-        # 流式输出 answer（当前对 mock 全文逐字；TODO: 接 LLM stream）
-        for token in generate_answer_stream(
-            question=state.get("question", ""),
-            history=state.get("history", []),
-            sources=state.get("sources", []),
-        ):
+        # 展示层流式：唯一答案来源是 answer 节点写入的 state["answer"]。
+        # TODO(workflow/D + api/E): answer 节点接真 LLM 流式后，可从图执行层透传 token，
+        # 但 done.answer 仍应以最终 state["answer"] 为权威值。
+        for token in stream_text(answer):
             payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
 

@@ -11,7 +11,7 @@ LangGraph 主图装配
 
 from __future__ import annotations
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 
 from app.workflow.nodes.answer import answer_node
 from app.workflow.nodes.executor import executor_node
@@ -49,7 +49,7 @@ def build_rag_graph():
     graph.add_node("retrieval", retrieval_node)
     graph.add_node("answer", answer_node)
 
-    graph.set_entry_point("preprocess")
+    graph.add_edge(START, "preprocess")
     graph.add_edge("preprocess", "rule_match")
     graph.add_edge("rule_match", "query_route")
     graph.add_conditional_edges(

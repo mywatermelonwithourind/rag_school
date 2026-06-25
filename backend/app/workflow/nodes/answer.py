@@ -4,7 +4,35 @@ from __future__ import annotations
 
 from app.retrieval.pipeline import fetch_parent_chunks_by_ids
 from app.workflow.llm_client import generate_answer
-from app.workflow.state import AgentState, Citation
+from app.workflow.state import AgentState, Citation, SourceChunk
+
+
+_INSUFFICIENT_ANSWER = (
+    "抱歉，我在知识库中没有找到与您问题足够相关的材料。"
+    "建议您换个说法或联系学院教务办公室获取准确信息。"
+)
+
+
+def _append_trace(state: AgentState, marker: str) -> list[str]:
+    trace = list(state.get("debug_trace", []))
+    trace.append(marker)
+    return trace
+
+
+def _score(source: SourceChunk) -> float:
+    return float(source.get("score_rerank") or source.get("score_hybrid", 0.0))
+
+
+def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citation]:
+    return [
+        {
+            "parent_chunk_id": source["parent_chunk_id"],
+            "doc_id": source["doc_id"],
+            "snippet": source["content"][:120],
+            "relevance_score": _score(source),
+        }
+        for source in sources[:limit]
+    ]
 
 
 def answer_node(state: AgentState) -> AgentState:
@@ -22,8 +50,8 @@ def answer_node(state: AgentState) -> AgentState:
         - debug_trace: 追加 "answer"
 
     负责成员: workflow 组（D）
-    TODO(workflow/D): 完善 prompt、FAQ template 模式、出处格式化
-    TODO(workflow/D): 材料不足兜底仅依据 retrieval_sufficient，勿重复实现 B 的阈值逻辑
+    TODO(workflow/D): 后续真流式时，将 LLM token 事件从本节点/图执行层透传给 API。
+    TODO(workflow/D): 材料不足兜底仅依据 retrieval_sufficient，勿重复实现 B 的阈值逻辑。
     """
     intent = state.get("query_intent", "rewrite")
     sources = list(state.get("sources") or [])
@@ -37,24 +65,20 @@ def answer_node(state: AgentState) -> AgentState:
                 faq_match.get("target_parent_chunk_ids", [])
             )
         if sources:
-            content = sources[0]["content"]
-            citations: list[Citation] = [
-                {
-                    "parent_chunk_id": s["parent_chunk_id"],
-                    "doc_id": s["doc_id"],
-                    "snippet": s["content"][:120],
-                    "relevance_score": s.get("score_rerank") or s.get("score_hybrid", 0.0),
-                }
-                for s in sources[:3]
-            ]
-            trace = list(state.get("debug_trace", []))
-            trace.append("answer:faq_direct")
             return {
                 **state,
-                "answer": content,
-                "citations": citations,
-                "debug_trace": trace,
+                "sources": sources,
+                "answer": sources[0]["content"],
+                "citations": _build_citations(sources, limit=3),
+                "debug_trace": _append_trace(state, "answer:faq_direct"),
             }
+
+        return {
+            **state,
+            "answer": _INSUFFICIENT_ANSWER,
+            "citations": [],
+            "debug_trace": _append_trace(state, "answer:insufficient"),
+        }
 
     # 无需检索的直接回答
     if intent == "direct_answer":
@@ -64,28 +88,20 @@ def answer_node(state: AgentState) -> AgentState:
             sources=[],
             insufficient=False,
         )
-        trace = list(state.get("debug_trace", []))
-        trace.append("answer:direct")
         return {
             **state,
             "answer": answer,
             "citations": [],
-            "debug_trace": trace,
+            "debug_trace": _append_trace(state, "answer:direct"),
         }
 
     # 材料不足兜底（trust retrieval_sufficient from B）
     if not sufficient or not sources:
-        fallback = (
-            "抱歉，我在知识库中没有找到与您问题足够相关的材料。"
-            "建议您换个说法或联系学院教务办公室获取准确信息。"
-        )
-        trace = list(state.get("debug_trace", []))
-        trace.append("answer:insufficient")
         return {
             **state,
-            "answer": fallback,
+            "answer": _INSUFFICIENT_ANSWER,
             "citations": [],
-            "debug_trace": trace,
+            "debug_trace": _append_trace(state, "answer:insufficient"),
         }
 
     answer = generate_answer(
@@ -95,22 +111,9 @@ def answer_node(state: AgentState) -> AgentState:
         insufficient=False,
     )
 
-    citations = [
-        {
-            "parent_chunk_id": s["parent_chunk_id"],
-            "doc_id": s["doc_id"],
-            "snippet": s["content"][:120],
-            "relevance_score": s.get("score_rerank") or s.get("score_hybrid", 0.0),
-        }
-        for s in sources[:5]
-    ]
-
-    trace = list(state.get("debug_trace", []))
-    trace.append("answer:generated")
-
     return {
         **state,
         "answer": answer,
-        "citations": citations,
-        "debug_trace": trace,
+        "citations": _build_citations(sources, limit=5),
+        "debug_trace": _append_trace(state, "answer:rag"),
     }

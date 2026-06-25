@@ -1,15 +1,104 @@
-"""
-LLM 客户端 — 百炼 deepseek 直连（可 mock）
-
-TODO(workflow): 实现真实 HTTP 调用与流式 token 输出供 SSE 使用
-"""
+"""LLM 客户端 — 百炼 deepseek 直连（可 mock）"""
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from typing import Any
 
+import httpx
 from app.core.config import get_settings
 from app.workflow.state import HistoryMessage, SourceChunk
+
+
+def _format_history(history: list[HistoryMessage]) -> list[dict[str, str]]:
+    return [
+        {"role": item["role"], "content": item["content"]}
+        for item in history
+        if item.get("role") in {"user", "assistant"} and item.get("content")
+    ]
+
+
+def _format_sources(sources: list[SourceChunk]) -> str:
+    if not sources:
+        return "无检索材料。"
+
+    blocks: list[str] = []
+    for idx, source in enumerate(sources, start=1):
+        blocks.append(
+            "\n".join(
+                [
+                    f"[材料 {idx}]",
+                    f"parent_chunk_id: {source['parent_chunk_id']}",
+                    f"doc_id: {source['doc_id']}",
+                    f"content: {source['content']}",
+                ]
+            )
+        )
+    return "\n\n".join(blocks)
+
+
+def _build_messages(
+    question: str,
+    history: list[HistoryMessage],
+    sources: list[SourceChunk],
+) -> list[dict[str, str]]:
+    system_prompt = (
+        "你是计算机学院智能问答助手。"
+        "如果提供了知识库材料，必须优先依据材料回答，不要编造材料外信息。"
+        "回答应简洁、准确、适合学生阅读。"
+    )
+    user_prompt = (
+        f"用户问题：{question}\n\n"
+        f"知识库材料：\n{_format_sources(sources)}\n\n"
+        "请给出最终回答。"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        *_format_history(history),
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _mock_answer(question: str, sources: list[SourceChunk]) -> str:
+    ctx = "\n".join(source["content"][:80] for source in sources[:3])
+    return (
+        f"[MOCK LLM 回答] 关于「{question}」：\n"
+        f"根据知识库材料（{len(sources)} 条），简要说明如下。\n"
+        f"参考片段：{ctx or '无'}"
+    )
+
+
+def _chat_completions_url(base_url: str) -> str:
+    return f"{base_url.rstrip('/')}/chat/completions"
+
+
+def _request_payload(
+    question: str,
+    history: list[HistoryMessage],
+    sources: list[SourceChunk],
+    *,
+    stream: bool,
+) -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "model": settings.llm_model,
+        "messages": _build_messages(question, history, sources),
+        "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
+        "stream": stream,
+    }
+
+
+def _auth_headers() -> dict[str, str]:
+    settings = get_settings()
+    if not settings.llm_api_key:
+        raise RuntimeError("RAG_LLM_API_KEY 为空，无法调用真实 LLM；请设置 RAG_LLM_MOCK=true 或填入 API Key")
+
+    return {
+        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Content-Type": "application/json",
+    }
 
 
 def generate_answer(
@@ -33,32 +122,76 @@ def generate_answer(
     settings = get_settings()
 
     if settings.llm_mock:
-        ctx = "\n".join(s["content"][:80] for s in sources[:3])
-        return (
-            f"[MOCK LLM 回答] 关于「{question}」：\n"
-            f"根据知识库材料（{len(sources)} 条），"
-            f"简要说明如下…\n"
-            f"参考片段：{ctx or '无'}"
-        )
+        return _mock_answer(question, sources)
 
-    # TODO(workflow): 真实 API 调用
-    # import httpx
-    # messages = _build_messages(question, history, sources)
-    # response = httpx.post(...)
-    raise NotImplementedError("真实 LLM 调用待 workflow 组实现")
+    payload = _request_payload(question, history, sources, stream=False)
+    with httpx.Client(timeout=60.0) as client:
+        response = client.post(
+            _chat_completions_url(settings.llm_base_url),
+            headers=_auth_headers(),
+            json=payload,
+        )
+        response.raise_for_status()
+
+    data = response.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("LLM 响应缺少 choices")
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise RuntimeError("LLM 响应缺少 message.content")
+    return content
 
 
 def generate_answer_stream(
     question: str,
     history: list[HistoryMessage],
     sources: list[SourceChunk],
-):
+) -> Iterator[str]:
     """
-    流式生成（SSE 用）。
+    LLM 真流式生成接口。
+
+    当前 API 层仍先执行图得到 state["answer"]，再展示层逐字推送。
+    后续若 answer 节点改为端到端真流式，可复用本函数并将 token 从图执行层透传到 SSE。
 
     Yields:
         token 字符串
     """
-    full = generate_answer(question, history, sources)
-    for i, char in enumerate(full):
+    settings = get_settings()
+
+    if settings.llm_mock:
+        yield from stream_text(_mock_answer(question, sources))
+        return
+
+    payload = _request_payload(question, history, sources, stream=True)
+    with httpx.Client(timeout=None) as client:
+        with client.stream(
+            "POST",
+            _chat_completions_url(settings.llm_base_url),
+            headers=_auth_headers(),
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                if not line.startswith("data: "):
+                    continue
+
+                raw = line.removeprefix("data: ").strip()
+                if raw == "[DONE]":
+                    break
+
+                payload = json.loads(raw)
+                delta = (payload.get("choices") or [{}])[0].get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    yield content
+
+
+def stream_text(text: str) -> Iterator[str]:
+    """展示层流式：把已生成的最终答案按字符切成 SSE token。"""
+    for char in text:
         yield char

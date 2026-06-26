@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
-from app.core.chat_history import save_chat_turn
+from app.core.chat_history import load_recent_history, save_chat_turn
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
 from app.workflow.llm_client import stream_text
@@ -20,15 +20,26 @@ from app.workflow.state import AgentState
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
+HISTORY_TURN_LIMIT = 2
+
 
 def _build_initial_state(body: ChatRequest) -> AgentState:
     session_id = body.session_id or new_session_id()
+    history = []
+    trace = []
+    if body.session_id:
+        try:
+            history = load_recent_history(session_id, limit=HISTORY_TURN_LIMIT)
+            trace.append(f"history_loaded:messages={len(history)}")
+        except Exception:
+            logger.exception("Failed to load chat history")
+            trace.append("history_load_failed")
+
     return {
         "question": body.question,
-        # 最小闭环阶段只存档不读历史；多轮上下文加载后续再恢复。
-        "history": [],
+        "history": history,
         "session_id": session_id,
-        "debug_trace": [],
+        "debug_trace": trace,
     }
 
 

@@ -26,10 +26,8 @@ def classify_intent(
     """
     路由分类：决定 query_route 后的条件分流（executor 路径 or 直答 answer）。
 
-    TODO(query_understanding/C):
-        - 用 LLM few-shot 分类，system prompt 必须包含 ROUTING_PROMPT_CONSTRAINTS
-        - direct_answer 保守：拿不准优先 rewrite，防止该查文档的问题误走 direct_answer 导致 LLM 编造
-        - 或规则 + 关键词（寒暄 → direct_answer，含"和""以及" → decompose）
+    当前实现：规则优先，LLM 路由后续作为可选增强接入。
+    direct_answer 必须保守，拿不准一律 rewrite，避免业务问题无材料直答。
 
     Args:
         question: 清洗后问题
@@ -39,17 +37,39 @@ def classify_intent(
     Returns:
         QueryIntent（不含 direct_parent_chunk，该意图由 FAQ 短路设定）
     """
-    q = question.strip()
+    del history, session_context  # 预留给后续 LLM 路由增强。
 
-    # 寒暄 / 致谢 / 告别 → direct_answer（严格短句）
-    greetings = ("你好", "您好", "hi", "hello", "谢谢", "再见")
-    if any(g in q.lower() for g in greetings) and len(q) < 10:
+    q = question.strip()
+    compact = "".join(ch for ch in q if not ch.isspace())
+    lowered = compact.lower().strip("。！？!?,，~～.；;：:")
+
+    # 寒暄 / 致谢 / 告别 → direct_answer（严格短句，避免业务问题误直答）
+    direct_answer_phrases = {
+        "你好",
+        "您好",
+        "hi",
+        "hello",
+        "谢谢",
+        "谢谢你",
+        "多谢",
+        "再见",
+        "拜拜",
+        "好的",
+        "好",
+        "收到",
+    }
+    if lowered in direct_answer_phrases:
         return "direct_answer"
 
-    # 复杂多问 → decompose（简单规则占位）
-    if "？" in q and "以及" in q:
+    # 同轮多个独立问题 → decompose。仅对明确多问触发，普通“和/以及”不贸然拆。
+    question_mark_count = q.count("?") + q.count("？")
+    if question_mark_count > 1:
         return "decompose"
-    if q.count("?") + q.count("？") > 1:
+    if question_mark_count >= 1 and any(
+        marker in q for marker in ("以及", "并且", "分别", "同时", "另外")
+    ):
+        return "decompose"
+    if any(marker in q for marker in ("分别介绍", "分别说明", "对比", "区别")):
         return "decompose"
 
     # 默认 rewrite（保守：宁可检索也不 direct_answer）

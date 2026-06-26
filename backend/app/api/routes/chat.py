@@ -14,9 +14,7 @@ from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
 from app.core.chat_history import save_chat_turn
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
-from app.workflow.llm_client import generate_answer_stream
-from app.workflow.nodes.preprocess import preprocess_node
-from app.workflow.nodes.query_route import query_route_node
+from app.workflow.llm_client import stream_text
 from app.workflow.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -74,27 +72,19 @@ async def chat_stream(body: ChatRequest):
         data: {"type":"citations","content":[...]}
         data: {"type":"done","session_id":"..."}
     """
-    initial = _build_initial_state(body)
-    # 最小闭环阶段：只跑预处理 + 固定 direct_answer 路由，跳过 FAQ / 检索。
-    routed_state = query_route_node(preprocess_node(initial))
+    final_state = run_rag_pipeline(_build_initial_state(body))
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        answer = ""
-        for token in generate_answer_stream(
-            question=routed_state.get("question", ""),
-            history=[],
-            sources=[],
-        ):
-            answer += token
+        answer = final_state.get("answer", "")
+        for token in stream_text(answer):
             payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
 
-        final_state: AgentState = {
-            **routed_state,
-            "answer": answer,
-            "citations": [],
-            "debug_trace": [*routed_state.get("debug_trace", []), "answer:direct"],
-        }
+        citations_payload = json.dumps(
+            {"type": "citations", "content": final_state.get("citations", [])},
+            ensure_ascii=False,
+        )
+        yield f"data: {citations_payload}\n\n"
 
         done_payload = json.dumps(
             {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.config import get_settings
+from app.query_understanding.router import classify_intent
 from app.workflow.state import AgentState, RetrievalPlan
 
 
@@ -20,12 +21,20 @@ def query_route_node(state: AgentState) -> AgentState:
         - debug_trace: 追加 "query_route"
 
     负责成员: query_understanding 组
-    TODO(query_understanding/C): 恢复真实路由时，再接回 FAQ 短路与 classify_intent；
-        当前最小闭环阶段强制 direct_answer，用于验证前后端 + LLM + 存库。
+    规则优先：FAQ 短路 → direct_parent_chunk；寒暄/多问/业务问题由 classify_intent 保守判定。
     """
     settings = get_settings()
-    # TODO(query_understanding/C): 最小闭环临时短路，之后恢复为真实 intent 分类。
-    intent = "direct_answer"
+    question = state.get("normalized_question") or state.get("question", "")
+    faq_match = state.get("faq_match") or {}
+
+    if state.get("faq_short_circuit") and faq_match.get("matched"):
+        intent = "direct_parent_chunk"
+    else:
+        intent = classify_intent(
+            question=question,
+            history=state.get("history", []),
+            session_context=state.get("session_context", {}),
+        )
 
     plan: RetrievalPlan = {
         "top_k_vector": settings.top_k_vector,
@@ -37,7 +46,8 @@ def query_route_node(state: AgentState) -> AgentState:
     }
 
     trace = list(state.get("debug_trace", []))
-    trace.append(f"query_route:{intent}")
+    route_source = "faq" if intent == "direct_parent_chunk" else "rule"
+    trace.append(f"query_route:{intent},source={route_source}")
 
     return {
         **state,

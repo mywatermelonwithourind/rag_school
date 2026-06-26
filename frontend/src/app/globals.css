@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
-  @apply bg-slate-50 text-slate-900;
+  min-height: 100%;
+}
+
+body {
+  @apply bg-[#eef5fb] text-slate-900;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
 }

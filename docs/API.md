@@ -375,6 +375,48 @@ data: {"type":"done","session_id":"...","debug_trace":[...],"answer":"[MOCK LLM 
 
 ---
 
+## POST `/api/ingest/upload`
+
+### 用途
+
+上传一个本地文档，后端解析文本、清洗、父子切片，并写入知识库。
+
+支持格式：`.pdf`、`.docx`、`.txt`、`.md`。
+
+### 请求
+
+`multipart/form-data`
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file` | `file` | 是 | 待入库文档 |
+| `kb_id` | `string` | 否 | 默认 `kb_cs_college` |
+| `write_vectors` | `boolean` | 否 | 默认 `true`，是否写入 Milvus 子块向量 |
+| `fail_on_vector_error` | `boolean` | 否 | 默认 `false`，Milvus 写入失败时是否让整个请求失败 |
+
+### 切片策略
+
+- 父块：按语义单元打包，目标约 `2000 token`。
+- 子块：基于段落/句子语义切分，目标约 `200 token`，尽量保持在 `150–250 token`。
+- 当前 token 统计为轻量估算，后续可替换为 embedding 模型 tokenizer。
+
+### 响应体
+
+对应 `IngestResponse`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `docs` | `number` | 处理文档数，上传接口通常为 `1` |
+| `skipped_docs` | `string[]` | 未提取到文本而跳过的文档 |
+| `parents` | `number` | 生成父块数 |
+| `children` | `number` | 生成子块数 |
+| `parent_upserts` | `number` | MySQL 父块写入/更新数 |
+| `vector_upserts` | `number` | Milvus 子块向量写入/更新数 |
+| `source_dir` | `string` | 上传来源标识 |
+| `warnings` | `string[]` | 解析或向量写入提醒 |
+
+---
+
 ## 共享数据结构
 
 ### HistoryMessage

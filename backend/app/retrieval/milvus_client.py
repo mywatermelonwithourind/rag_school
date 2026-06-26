@@ -5,8 +5,75 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import get_settings
+from app.workflow.state import SourceChunk
 
-# TODO(retrieval): from pymilvus import connections, Collection
+_MILVUS_ALIAS = "rag_ingest"
+
+
+def _connect_milvus() -> None:
+    from pymilvus import connections
+
+    settings = get_settings()
+    connections.connect(
+        alias=_MILVUS_ALIAS,
+        host=settings.milvus_host,
+        port=str(settings.milvus_port),
+    )
+
+
+def _get_or_create_collection():
+    from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, utility
+
+    settings = get_settings()
+    _connect_milvus()
+    if utility.has_collection(settings.milvus_collection, using=_MILVUS_ALIAS):
+        return Collection(settings.milvus_collection, using=_MILVUS_ALIAS)
+
+    fields = [
+        FieldSchema("child_chunk_id", DataType.VARCHAR, is_primary=True, max_length=128),
+        FieldSchema("parent_chunk_id", DataType.VARCHAR, max_length=128),
+        FieldSchema("content", DataType.VARCHAR, max_length=8192),
+        FieldSchema("doc_id", DataType.VARCHAR, max_length=128),
+        FieldSchema("kb_id", DataType.VARCHAR, max_length=128),
+        FieldSchema("chunk_index", DataType.INT64),
+        FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=settings.milvus_dim),
+    ]
+    schema = CollectionSchema(fields, description="RAG child chunks")
+    collection = Collection(settings.milvus_collection, schema=schema, using=_MILVUS_ALIAS)
+    collection.create_index(
+        field_name="embedding",
+        index_params={
+            "index_type": "IVF_FLAT",
+            "metric_type": "COSINE",
+            "params": {"nlist": 128},
+        },
+    )
+    return collection
+
+
+def upsert_child_chunks(
+    child_chunks: list[dict[str, Any]],
+    embeddings: list[list[float]],
+) -> int:
+    """Upsert child chunks into Milvus. Raises if Milvus is unavailable."""
+    if not child_chunks:
+        return 0
+    if len(child_chunks) != len(embeddings):
+        raise ValueError("child_chunks and embeddings length mismatch")
+
+    collection = _get_or_create_collection()
+    data = [
+        [str(chunk["child_chunk_id"])[:128] for chunk in child_chunks],
+        [str(chunk["parent_chunk_id"])[:128] for chunk in child_chunks],
+        [str(chunk.get("content", ""))[:8192] for chunk in child_chunks],
+        [str(chunk.get("doc_id", ""))[:128] for chunk in child_chunks],
+        [str(chunk.get("kb_id", ""))[:128] for chunk in child_chunks],
+        [int(chunk.get("chunk_index", 0) or 0) for chunk in child_chunks],
+        embeddings,
+    ]
+    collection.upsert(data)
+    collection.flush()
+    return len(child_chunks)
 
 
 def search_child_chunks(query: str, top_k: int = 20) -> list[dict[str, Any]]:

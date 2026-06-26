@@ -69,7 +69,7 @@ rag_school/
 
 | 成员 | 目录 | 职责 | 当前桩 / TODO |
 |------|------|------|---------------|
-| **A** | `app/data/` | 文档加载、父子切片、入库脚本 | `ingest.py` 未写 MySQL/Milvus；`chunking.py` 简单按长度切 |
+| **A** | `app/data/` | 文档加载、父子切片、入库脚本 | 支持 `.pdf/.docx/.txt/.md` 上传解析；父块约 2000 token，子块约 150–250 token 语义切分；父块 upsert MySQL，子块向量写 Milvus |
 | **B** | `app/retrieval/` | Milvus 召回、父块聚合、混合粗排、qwen3-rerank | 全 mock；`pipeline.py` 有 mock 父块 |
 | **C** | `app/query_understanding/` | 路由分类、多轮改写、FAQ 匹配 | 规则占位；FAQ 读内存 mock，未连 MySQL |
 | **D** | `app/workflow/` | LangGraph 主图、AgentState、LLM 生成、兜底 | 节点已串好；`llm_client.py` mock |
@@ -133,6 +133,7 @@ preprocess → rule_match → query_route
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/chat` | 同步问答（调试） |
 | POST | `/api/chat/stream` | SSE 流式 |
+| POST | `/api/ingest/upload` | 上传本地文档并清洗入库 |
 
 SSE 事件：`token` | `citations` | `done`
 
@@ -166,6 +167,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 python scripts/check_connectivity.py   # 先自检 MySQL/Milvus 连通
+python scripts/create_child_chunks_collection.py  # 首次使用前创建 Milvus 子向量 collection
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 

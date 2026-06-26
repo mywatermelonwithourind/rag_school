@@ -5,11 +5,36 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Index, JSON, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Index, Integer, JSON, String, Text, func
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+
+class ParentChunkRecord(Base):
+    """Knowledge-base parent chunk stored in MySQL for display and FAQ direct answers."""
+
+    __tablename__ = "parent_chunk"
+
+    parent_chunk_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content: Mapped[str] = mapped_column(MEDIUMTEXT, nullable=False)
+    doc_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kb_id: Mapped[str] = mapped_column(String(64), nullable=False, default="kb_cs_college")
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    meta: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        server_onupdate=func.current_timestamp(),
+    )
 
 
 class ChatConversationRecord(Base):

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useCallback, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useCallback, useMemo, useRef, useState } from "react";
 import MessageList, { Citation, Message } from "./MessageList";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
@@ -116,17 +116,67 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestStatus, setIngestStatus] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [searchTerm, setSearchTerm] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const ingestFileRef = useRef<HTMLInputElement | null>(null);
 
   const filteredTasks = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
     if (!keyword) return recentTasks;
     return recentTasks.filter((task) => task.toLowerCase().includes(keyword));
   }, [searchTerm]);
+
+  const uploadAndIngest = useCallback(async (file: File) => {
+    if (ingesting) return;
+    setIngesting(true);
+    setIngestStatus(`\u6b63\u5728\u6e05\u6d17\u5165\u5e93\uff1a${file.name}`);
+
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      body.append("kb_id", "kb_cs_college");
+      body.append("write_vectors", "true");
+      body.append("fail_on_vector_error", "false");
+
+      const res = await fetch(`${API_BASE}/api/ingest/upload`, {
+        method: "POST",
+        body,
+      });
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const detail = data?.detail ? `：${data.detail}` : "";
+        throw new Error(`HTTP ${res.status}${detail}`);
+      }
+
+      const warningText =
+        data.warnings?.length > 0 ? `\uff0c${data.warnings.length} \u6761\u63d0\u9192` : "";
+      setIngestStatus(
+        `${file.name}\uff1a\u5df2\u5165\u5e93 ${data.parent_upserts} \u4e2a\u7236\u5757\uff0c${data.vector_upserts} \u4e2a\u5411\u91cf${warningText}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "未知错误";
+      setIngestStatus(`\u5165\u5e93\u5931\u8d25\uff1a${message}`);
+    } finally {
+      setIngesting(false);
+    }
+  }, [ingesting]);
+
+  const chooseIngestFile = useCallback(() => {
+    ingestFileRef.current?.click();
+  }, []);
+
+  const handleIngestFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    void uploadAndIngest(file);
+  }, [uploadAndIngest]);
 
   const submitQuestion = useCallback(async (value?: string) => {
     const question = (value ?? input).trim();
@@ -287,7 +337,26 @@ export default function ChatInterface() {
             <p className="mt-2 truncate text-sm font-medium text-slate-500">{T.subtitle}</p>
           </div>
 
-          <div className="w-24 shrink-0" />
+          <div className="flex w-56 shrink-0 flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={chooseIngestFile}
+              disabled={ingesting || loading}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-[#315fd8] disabled:opacity-50"
+            >
+              {ingesting ? "\u5165\u5e93\u4e2d..." : "\u9009\u62e9\u6587\u4ef6\u5165\u5e93"}
+            </button>
+            <input
+              ref={ingestFileRef}
+              type="file"
+              accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              className="hidden"
+              onChange={handleIngestFileChange}
+            />
+            <span className="max-w-full truncate text-xs text-slate-400">
+              {ingestStatus || "PDF / DOCX / TXT / MD"}
+            </span>
+          </div>
         </header>
 
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_90%_88%,rgba(140,229,222,0.46),transparent_30%),linear-gradient(120deg,#f8fbff_0%,#eff6ff_48%,#effbf9_100%)]">

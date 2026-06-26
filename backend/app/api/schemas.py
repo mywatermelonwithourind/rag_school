@@ -28,3 +28,24 @@ class HealthResponse(BaseModel):
     status: str
     mysql: bool
     milvus: bool = False
+
+
+class IngestRequest(BaseModel):
+    dir_path: str | None = Field(
+        default=None,
+        description="Relative path under backend/data, or null for backend/data/raw",
+    )
+    kb_id: str = Field(default="kb_cs_college", min_length=1, max_length=64)
+    write_vectors: bool = True
+    fail_on_vector_error: bool = False
+
+
+class IngestResponse(BaseModel):
+    docs: int
+    skipped_docs: list[str] = Field(default_factory=list)
+    parents: int
+    children: int
+    parent_upserts: int
+    vector_upserts: int
+    source_dir: str
+    warnings: list[str] = Field(default_factory=list)

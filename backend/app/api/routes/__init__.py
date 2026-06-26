@@ -1,3 +1,3 @@
-from app.api.routes import chat, health
+from app.api.routes import chat, health, ingest
 
-__all__ = ["chat", "health"]
+__all__ = ["chat", "health", "ingest"]

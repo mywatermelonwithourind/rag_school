@@ -128,7 +128,10 @@ export default function ChatInterface() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
@@ -282,6 +285,7 @@ export default function ChatInterface() {
     setInput("");
     setLoading(false);
     setActiveView("chat");
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   };
 
   const openConversation = (conversationId: string) => {
@@ -295,53 +299,61 @@ export default function ChatInterface() {
   return (
     <div className="flex h-dvh overflow-hidden bg-white text-slate-900">
       {sidebarOpen && (
-        <aside className="hidden w-[clamp(260px,18vw,330px)] shrink-0 flex-col border-r border-[#e5e7eb] bg-white px-3 py-4 shadow-[1px_0_0_rgba(17,24,39,0.10)] lg:flex">
-          <div className="mb-5 flex h-10 items-center justify-end px-4">
-            <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition hover:bg-[#f3f4f6] hover:text-slate-700" aria-label={T.collapse} title={T.collapse}>
-              <span className="text-2xl leading-none">&lt;</span>
+        <aside className="hidden w-[clamp(236px,17vw,286px)] shrink-0 flex-col border-r border-[#e5e5e5] bg-white px-3 py-5 lg:flex">
+          <div className="mb-7 flex h-9 items-center justify-between px-2">
+            <h2 className="truncate text-lg font-bold leading-none text-black">{T.appTitle}</h2>
+            <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition hover:bg-[#f0f0f0] hover:text-black" aria-label={T.collapse} title={T.collapse}>
+              <Icon name="panel" className="h-6 w-6" />
             </button>
           </div>
 
-          <button type="button" onClick={startNewChat} className="flex h-11 w-full items-center justify-start gap-3 rounded-lg bg-[#111827] px-5 text-base font-medium text-white shadow-sm transition hover:bg-black">
-            <Icon name="plus" />
+          <button type="button" onClick={startNewChat} className="flex h-11 w-full items-center justify-start gap-3 rounded-xl px-3 text-base font-medium text-black transition hover:bg-[#f0f0f0]">
+            <Icon name="edit" className="h-6 w-6" />
             {T.newChat}
           </button>
 
-          <nav className="mt-3 space-y-1">
-            <button type="button" onClick={() => setActiveView("chat")} className={`flex h-11 w-full items-center gap-3 rounded-lg px-4 text-left text-base transition ${activeView === "chat" ? "bg-[#f3f4f6] font-semibold text-[#111827]" : "font-medium text-slate-600 hover:bg-[#f3f4f6]"}`}>
-              <Icon name="chat" />
+          {searchOpen ? (
+            <label className="mt-2 flex h-11 items-center gap-3 rounded-xl bg-[#f3f3f3] px-3 text-black ring-1 ring-[#e5e5e5]">
+              <Icon name="search" className="h-5 w-5 text-black" />
+              <input ref={searchInputRef} type="search" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={T.search} className="min-w-0 flex-1 bg-transparent text-sm font-medium text-black outline-none placeholder:text-[#777]" />
+              <button type="button" onClick={() => { setSearchTerm(""); setSearchOpen(false); }} className="rounded-md px-1 text-lg leading-none text-[#777] hover:bg-white hover:text-black" aria-label={T.all} title={T.all}>×</button>
+            </label>
+          ) : (
+            <button type="button" onClick={() => { setSearchOpen(true); window.setTimeout(() => searchInputRef.current?.focus(), 0); }} className="mt-2 flex h-11 w-full items-center justify-start gap-3 rounded-xl px-3 text-base font-medium text-black transition hover:bg-[#f0f0f0]">
+              <Icon name="search" className="h-6 w-6" />
+              {T.search}
+            </button>
+          )}
+
+          <nav className="mt-2 space-y-1">
+            <button type="button" onClick={() => setActiveView("chat")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "chat" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+              <Icon name="chat" className="h-6 w-6" />
               {T.unifiedChat}
             </button>
-            <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-lg px-4 text-left text-base transition ${activeView === "knowledge" ? "bg-[#f3f4f6] font-semibold text-[#111827]" : "font-medium text-slate-600 hover:bg-[#f3f4f6]"}`}>
-              <Icon name="book" />
+            <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "knowledge" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+              <Icon name="book" className="h-6 w-6" />
               {T.knowledge}
             </button>
           </nav>
 
-          <label className="mt-5 flex h-11 items-center gap-3 rounded-lg border border-[#e5e7eb] bg-white px-4 text-slate-400 shadow-sm focus-within:border-[#9ca3af] focus-within:ring-4 focus-within:ring-[#f3f4f6]">
-            <Icon name="search" className="text-slate-400" />
-            <input type="search" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={T.search} className="min-w-0 flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400" />
-          </label>
-
-          <div className="mt-3 rounded-lg bg-[#f9fafb] px-4 py-3 text-sm text-slate-500">
+          <div className="mt-4 px-3 text-xs font-medium text-[#7a7a7a]">
             {T.total}: {conversations.length}
           </div>
 
-          <div className="mt-4 flex min-h-0 flex-1 flex-col">
-            <div className="mb-2 flex items-center justify-between px-3 text-sm text-slate-500">
-              <span>{T.recent}</span>
-              <button type="button" onClick={() => setSearchTerm("")} className="font-medium text-[#111827] hover:text-black">{T.all}</button>
+          <div className="mt-5 flex min-h-0 flex-1 flex-col">
+            <div className="mb-3 flex items-center justify-between px-2">
+              <h3 className="text-base font-bold text-black">{T.recent}</h3>
+              <button type="button" onClick={() => setSearchTerm("")} className="text-sm font-medium text-[#5f5f5f] hover:text-black">{T.all}</button>
             </div>
             <div className="min-h-0 space-y-1 overflow-y-auto pr-1">
               {conversations.length === 0 ? (
-                <p className="px-3 py-3 text-sm text-slate-400">{T.noRecent}</p>
+                <p className="px-3 py-3 text-sm text-[#8a8a8a]">{T.noRecent}</p>
               ) : filteredConversations.length === 0 ? (
-                <p className="px-3 py-3 text-sm text-slate-400">{T.noResults}</p>
+                <p className="px-3 py-3 text-sm text-[#8a8a8a]">{T.noResults}</p>
               ) : (
                 filteredConversations.map((conversation) => (
-                  <button key={conversation.id} type="button" onClick={() => openConversation(conversation.id)} className={`w-full rounded-lg px-3 py-2.5 text-left transition ${conversation.id === activeConversationId ? "bg-[#f3f4f6]" : "hover:bg-[#f3f4f6]"}`}>
-                    <span className="block truncate text-base font-semibold text-slate-800">{conversation.title}</span>
-                    <span className="mt-1 block text-sm text-slate-400">{T.assistant}</span>
+                  <button key={conversation.id} type="button" onClick={() => openConversation(conversation.id)} className={`w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-black transition ${conversation.id === activeConversationId ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+                    <span className="block truncate">{conversation.title}</span>
                   </button>
                 ))
               )}
@@ -349,7 +361,6 @@ export default function ChatInterface() {
           </div>
         </aside>
       )}
-
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-20 shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5">
           <div className="flex w-24 items-center gap-4 text-slate-500">
@@ -376,7 +387,7 @@ export default function ChatInterface() {
           {activeView === "chat" && (
             <div className="shrink-0 bg-white px-3 pb-4 pt-2 sm:px-6 lg:px-10">
               <form onSubmit={sendMessage} className="mx-auto flex min-h-[96px] w-full max-w-[min(980px,calc(100vw-3rem))] items-end gap-3 rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-[0_18px_45px_rgba(17,24,39,0.10)] focus-within:ring-4 focus-within:ring-[#f3f4f6]">
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={T.placeholder} disabled={loading} rows={2} className="max-h-36 min-h-14 flex-1 resize-none bg-transparent text-lg leading-7 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-50" />
+                <textarea ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={T.placeholder} disabled={loading} rows={2} className="max-h-36 min-h-14 flex-1 resize-none bg-transparent text-lg leading-7 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-50" />
                 {loading ? (
                   <button type="button" onClick={() => abortRef.current?.abort()} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-slate-600 transition hover:bg-[#f3f4f6]" aria-label={T.stop} title={T.stop}><Icon name="stop" /></button>
                 ) : (
@@ -390,3 +401,4 @@ export default function ChatInterface() {
     </div>
   );
 }
+

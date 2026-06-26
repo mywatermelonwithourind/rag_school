@@ -156,12 +156,12 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
     return (
       <div className="flex flex-1 items-center justify-center overflow-y-auto px-5 py-10">
         <div className="w-full max-w-4xl text-center">
-          <p className="text-sm font-semibold text-[#3f74f6]">{T.assistant}</p>
+          <p className="text-sm font-semibold text-[#111827]">{T.assistant}</p>
           <h2 className="mt-4 text-3xl font-bold text-slate-950 sm:text-4xl">{T.emptyTitle}</h2>
           <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-500">{T.emptyDesc}</p>
           <div className="mt-9 grid gap-3 sm:grid-cols-3">
             {quickPrompts.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => onPromptClick?.(prompt)} className="min-h-24 rounded-lg border border-white/80 bg-white/90 px-5 py-4 text-left text-base font-semibold leading-6 text-slate-700 shadow-sm transition hover:border-blue-200 hover:text-[#315fd8] hover:shadow-md">
+              <button key={prompt} type="button" onClick={() => onPromptClick?.(prompt)} className="min-h-24 rounded-lg border border-[#e5e7eb] bg-[#ffffff]/92 px-5 py-4 text-left text-base font-semibold leading-6 text-slate-700 shadow-sm transition hover:border-[#d1d5db] hover:text-[#111827] hover:shadow-md">
                 {prompt}
                 <span className="mt-2 block text-sm font-normal text-slate-400">{T.assistant}</span>
               </button>
@@ -179,7 +179,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
           if (msg.role === "user") {
             return (
               <div key={msg.id} className="flex justify-end">
-                <div className="max-w-[78%] rounded-2xl bg-[#3f74f6] px-5 py-3 text-base leading-7 text-white shadow-sm">{msg.content}</div>
+                <div className="max-w-[78%] rounded-2xl border border-[#e5e7eb] bg-[#f3f4f6] px-5 py-3 text-base leading-7 text-slate-900 shadow-sm">{msg.content}</div>
               </div>
             );
           }
@@ -190,7 +190,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
           const copyFailed = copyState[msg.id] === "failed";
 
           return (
-            <article key={msg.id} className="max-w-5xl text-slate-900">
+            <article key={msg.id} className="max-w-5xl rounded-2xl border border-[#e5e7eb] bg-[#f3f4f6] px-5 py-4 text-slate-900 shadow-sm">
               <div className="space-y-1">{renderContent(msg.content, msg.streaming)}</div>
 
               {msg.streaming && (
@@ -202,7 +202,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
               )}
 
               {msg.citations && msg.citations.length > 0 && (
-                <div className="mt-7 border-t border-slate-200 pt-5">
+                <div className="mt-7 border-t border-[#e5e7eb] pt-5">
                   <button type="button" onClick={() => setExpandedRefs((prev) => ({ ...prev, [msg.id]: !prev[msg.id] }))} className="inline-flex items-center gap-2 text-base font-semibold text-slate-500 hover:text-slate-800" aria-expanded={refsOpen} title={refsOpen ? T.collapseRefs : T.expandRefs}>
                     {T.referencesPrefix} {msg.citations.length} {T.referencesSuffix}
                     <span className={`text-xl leading-none transition ${refsOpen ? "rotate-90" : ""}`}>{">"}</span>
@@ -210,7 +210,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
                   {refsOpen && (
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
                       {msg.citations.slice(0, 4).map((c, i) => (
-                        <div key={`${c.doc_id}-${i}`} className="rounded-lg bg-white/70 px-3 py-2 text-sm leading-6 text-slate-500">
+                        <div key={`${c.doc_id}-${i}`} className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-sm leading-6 text-slate-500">
                           <span className="mr-2 font-semibold text-slate-700">{c.doc_id}</span>
                           {c.snippet}
                         </div>
@@ -222,13 +222,13 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
 
               {!msg.streaming && (
                 <div className="mt-8 flex items-center gap-5 text-slate-500">
-                  <button type="button" onClick={() => void copyMessage(msg.id, msg.content)} className={`hover:text-slate-800 ${copied ? "text-[#315fd8]" : copyFailed ? "text-red-500" : ""}`} aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy} title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}>
+                  <button type="button" onClick={() => void copyMessage(msg.id, msg.content)} className={`hover:text-slate-800 ${copied ? "text-[#111827]" : copyFailed ? "text-slate-900" : ""}`} aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy} title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}>
                     <CopyIcon />
                   </button>
-                  <button type="button" onClick={() => toggleFeedback(msg.id, "like")} className={`hover:text-slate-800 ${feedbackValue === "like" ? "text-[#315fd8]" : ""}`} aria-label={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like} title={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like}>
+                  <button type="button" onClick={() => toggleFeedback(msg.id, "like")} className={`hover:text-slate-800 ${feedbackValue === "like" ? "text-[#111827]" : ""}`} aria-label={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like} title={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like}>
                     <ThumbIcon />
                   </button>
-                  <button type="button" onClick={() => toggleFeedback(msg.id, "dislike")} className={`hover:text-slate-800 ${feedbackValue === "dislike" ? "text-[#315fd8]" : ""}`} aria-label={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike} title={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike}>
+                  <button type="button" onClick={() => toggleFeedback(msg.id, "dislike")} className={`hover:text-slate-800 ${feedbackValue === "dislike" ? "text-[#111827]" : ""}`} aria-label={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike} title={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike}>
                     <ThumbIcon down />
                   </button>
                 </div>

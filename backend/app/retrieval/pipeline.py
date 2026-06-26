@@ -15,6 +15,13 @@ from app.retrieval.milvus_client import search_child_chunks
 from app.retrieval.reranker import rerank
 from app.workflow.state import FAQMatchResult, RetrievalPlan, SourceChunk
 
+MIN_CHILD_CONFIDENCE = 0.2
+PARENT_CHILD_BEST_WEIGHT = 0.78
+PARENT_CHILD_AVERAGE_WEIGHT = 0.17
+PARENT_CHILD_DENSITY_WEIGHT = 0.03
+PARENT_CHILD_QUERY_COVERAGE_WEIGHT = 0.02
+PARENT_CHILD_AVERAGE_GAP = 0.10
+
 # Mock 父块库
 _MOCK_PARENT_CHUNKS: dict[str, SourceChunk] = {
     "pc_office_hours": {
@@ -28,6 +35,18 @@ _MOCK_PARENT_CHUNKS: dict[str, SourceChunk] = {
         "score_hybrid": 0.90,
         "score_rerank": None,
         "metadata": {"section": "办公时间"},
+    },
+    "pc_office_location": {
+        "parent_chunk_id": "pc_office_location",
+        "child_chunk_id": "cc_004",
+        "content": "计算机学院办公室位于信息楼 3 层，学生可在工作时间前往咨询学籍、证明和日常事务。",
+        "doc_id": "doc_admin_guide",
+        "kb_id": "kb_cs_college",
+        "score_vector": 0.0,
+        "score_lexical": 0.0,
+        "score_hybrid": 0.0,
+        "score_rerank": None,
+        "metadata": {"section": "办公室地点"},
     },
     "pc_counselor_contact": {
         "parent_chunk_id": "pc_counselor_contact",
@@ -53,7 +72,23 @@ _MOCK_PARENT_CHUNKS: dict[str, SourceChunk] = {
         "score_rerank": None,
         "metadata": {"section": "毕业要求"},
     },
+    "pc_graduation_process": {
+        "parent_chunk_id": "pc_graduation_process",
+        "child_chunk_id": "cc_005",
+        "content": "毕业资格审核通常依据培养方案、课程成绩和学分完成情况进行，具体安排以学院通知为准。",
+        "doc_id": "doc_curriculum",
+        "kb_id": "kb_cs_college",
+        "score_vector": 0.0,
+        "score_lexical": 0.0,
+        "score_hybrid": 0.0,
+        "score_rerank": None,
+        "metadata": {"section": "毕业审核"},
+    },
 }
+
+
+def _clamp_score(value: float) -> float:
+    return max(0.0, min(value, 1.0))
 
 
 def _fetch_by_parent_ids(parent_ids: list[str]) -> list[SourceChunk]:
@@ -69,6 +104,148 @@ def fetch_parent_chunks_by_ids(parent_ids: list[str]) -> list[SourceChunk]:
     TODO(retrieval/B): 改查 MySQL parent_chunk 表
     """
     return _fetch_by_parent_ids(parent_ids)
+
+
+def _child_hit_summary(
+    hit: dict[str, Any],
+    *,
+    query: str,
+    query_index: int,
+    query_weight: float,
+) -> dict[str, Any]:
+    score = _clamp_score(float(hit.get("score", 0.0) or 0.0))
+    return {
+        "child_chunk_id": str(hit.get("child_chunk_id") or ""),
+        "parent_chunk_id": str(hit.get("parent_chunk_id") or ""),
+        "score": score,
+        "weighted_score": _clamp_score(score * query_weight),
+        "retrieval_query": query,
+        "retrieval_query_index": query_index,
+        "retrieval_query_weight": query_weight,
+    }
+
+
+def _apply_parent_child_weighting(candidate: dict[str, Any], query_count: int) -> dict[str, Any]:
+    child_hits = [
+        hit
+        for hit in candidate.get("child_hits", [])
+        if isinstance(hit, dict)
+    ]
+    weighted_scores = sorted(
+        (_clamp_score(float(hit.get("weighted_score", hit.get("score", 0.0)) or 0.0)) for hit in child_hits),
+        reverse=True,
+    )
+    if not weighted_scores:
+        return candidate
+
+    best_weighted_score = weighted_scores[0]
+    near_top_scores = [
+        score for score in weighted_scores[:3] if best_weighted_score - score < PARENT_CHILD_AVERAGE_GAP
+    ]
+    average_top_child_score = (
+        sum(near_top_scores) / len(near_top_scores)
+        if near_top_scores
+        else best_weighted_score
+    )
+    child_density_score = min(1.0, len(child_hits) / 3)
+    query_keys = {
+        int(hit.get("retrieval_query_index", 0) or 0)
+        for hit in child_hits
+    }
+    query_coverage_denominator = max(1, min(3, query_count))
+    query_coverage_score = min(1.0, len(query_keys) / query_coverage_denominator)
+    weighted_child_score = _clamp_score(
+        best_weighted_score * PARENT_CHILD_BEST_WEIGHT
+        + average_top_child_score * PARENT_CHILD_AVERAGE_WEIGHT
+        + child_density_score * PARENT_CHILD_DENSITY_WEIGHT
+        + query_coverage_score * PARENT_CHILD_QUERY_COVERAGE_WEIGHT
+    )
+    return {
+        **candidate,
+        "best_weighted_score": best_weighted_score,
+        "average_top_child_score": average_top_child_score,
+        "child_density_score": child_density_score,
+        "query_coverage_score": query_coverage_score,
+        "weighted_child_score": weighted_child_score,
+    }
+
+
+def build_parent_candidates_from_child_hits(
+    child_hits: list[dict[str, Any]],
+    *,
+    min_confidence: float = MIN_CHILD_CONFIDENCE,
+    query_count: int = 1,
+) -> list[dict[str, Any]]:
+    """把多个子块命中聚合成父块候选，并计算父块向量侧分数。"""
+    candidates_by_parent_id: dict[str, dict[str, Any]] = {}
+    for hit in child_hits:
+        score = _clamp_score(float(hit.get("score", 0.0) or 0.0))
+        if score < min_confidence:
+            continue
+        parent_chunk_id = str(hit.get("parent_chunk_id") or "").strip()
+        if not parent_chunk_id:
+            continue
+
+        candidate = candidates_by_parent_id.setdefault(
+            parent_chunk_id,
+            {
+                "parent_chunk_id": parent_chunk_id,
+                "representative_child_chunk_id": str(hit.get("child_chunk_id") or ""),
+                "child_hits": [],
+                "best_score": score,
+            },
+        )
+        candidate["child_hits"].append(hit)
+        if score > float(candidate.get("best_score", 0.0) or 0.0):
+            candidate["best_score"] = score
+            candidate["representative_child_chunk_id"] = str(hit.get("child_chunk_id") or "")
+
+    candidates = [
+        _apply_parent_child_weighting(candidate, query_count=query_count)
+        for candidate in candidates_by_parent_id.values()
+    ]
+    return sorted(
+        candidates,
+        key=lambda item: float(item.get("weighted_child_score", item.get("best_score", 0.0)) or 0.0),
+        reverse=True,
+    )
+
+
+def _candidates_to_parent_chunks(candidates: list[dict[str, Any]]) -> list[SourceChunk]:
+    parent_ids = [str(candidate.get("parent_chunk_id") or "") for candidate in candidates]
+    records_by_id = {
+        chunk["parent_chunk_id"]: chunk
+        for chunk in _fetch_by_parent_ids(parent_ids)
+    }
+    chunks: list[SourceChunk] = []
+    for candidate in candidates:
+        parent_id = str(candidate.get("parent_chunk_id") or "")
+        record = records_by_id.get(parent_id)
+        if record is None:
+            continue
+        metadata = dict(record.get("metadata") or {})
+        metadata["child_hits"] = list(candidate.get("child_hits") or [])
+        metadata["score_breakdown"] = {
+            **dict(metadata.get("score_breakdown") or {}),
+            "best_child_score": float(candidate.get("best_score", 0.0) or 0.0),
+            "best_weighted_score": float(candidate.get("best_weighted_score", 0.0) or 0.0),
+            "average_top_child_score": float(candidate.get("average_top_child_score", 0.0) or 0.0),
+            "child_density_score": float(candidate.get("child_density_score", 0.0) or 0.0),
+            "query_coverage_score": float(candidate.get("query_coverage_score", 0.0) or 0.0),
+            "weighted_child_score": float(candidate.get("weighted_child_score", 0.0) or 0.0),
+        }
+        chunks.append(
+            {
+                **record,
+                "child_chunk_id": str(candidate.get("representative_child_chunk_id") or "") or record.get("child_chunk_id"),
+                "score_vector": float(candidate.get("weighted_child_score", candidate.get("best_score", 0.0)) or 0.0),
+                "score_lexical": 0.0,
+                "score_hybrid": 0.0,
+                "score_rerank": None,
+                "metadata": metadata,
+            }
+        )
+    return chunks
 
 
 def is_retrieval_sufficient(sources: list[SourceChunk], plan: RetrievalPlan) -> bool:
@@ -118,26 +295,52 @@ def run_retrieval(
         return [], False
 
     all_hits: list[SourceChunk] = []
+    all_child_hits: list[dict[str, Any]] = []
 
-    for query in queries:
+    query_count = max(1, len(queries))
+    for query_index, query in enumerate(queries):
         # 1. Embedding
         _ = embed_texts([query])
 
         # 2. Milvus 子块召回（mock）
         child_hits = search_child_chunks(query, top_k=plan.get("top_k_vector", 20))
+        query_weight = 1.0 if query_index == 0 else 0.85
+        all_child_hits.extend(
+            _child_hit_summary(
+                hit,
+                query=query,
+                query_index=query_index,
+                query_weight=query_weight,
+            )
+            for hit in child_hits
+        )
 
-        # 3. 父块聚合（mock：映射到 mock 父块）
-        parent_ids = list({h.get("parent_chunk_id", "") for h in child_hits if h.get("parent_chunk_id")})
-        if not parent_ids:
-            parent_ids = list(_MOCK_PARENT_CHUNKS.keys())[: plan.get("top_k_parent", 8)]
+    # 3. 父块聚合：多个子块命中归并到 parent，并计算父块向量侧分数
+    parent_candidates = build_parent_candidates_from_child_hits(
+        all_child_hits,
+        min_confidence=MIN_CHILD_CONFIDENCE,
+        query_count=query_count,
+    )
+    if not parent_candidates:
+        fallback_parent_ids = list(_MOCK_PARENT_CHUNKS.keys())[: plan.get("top_k_parent", 8)]
+        parent_candidates = [
+            {
+                "parent_chunk_id": parent_id,
+                "representative_child_chunk_id": _MOCK_PARENT_CHUNKS[parent_id].get("child_chunk_id"),
+                "child_hits": [],
+                "best_score": _MOCK_PARENT_CHUNKS[parent_id].get("score_vector", 0.0),
+                "weighted_child_score": _MOCK_PARENT_CHUNKS[parent_id].get("score_vector", 0.0),
+            }
+            for parent_id in fallback_parent_ids
+        ]
 
-        parents = _fetch_by_parent_ids(parent_ids[: plan.get("top_k_parent", 8)])
+    parents = _candidates_to_parent_chunks(parent_candidates[: plan.get("top_k_parent", 8)])
 
-        # 4. 混合粗排
-        if plan.get("use_hybrid", True):
-            parents = hybrid_rank(query, parents)
+    # 4. 混合粗排
+    if plan.get("use_hybrid", True):
+        parents = hybrid_rank(queries[0], parents)
 
-        all_hits.extend(parents)
+    all_hits.extend(parents)
 
     # 去重按 parent_chunk_id
     seen: set[str] = set()
@@ -147,6 +350,18 @@ def run_retrieval(
         if pid not in seen:
             seen.add(pid)
             unique.append(s)
+            continue
+        for index, existing in enumerate(unique):
+            if existing["parent_chunk_id"] == pid and s.get("score_hybrid", 0.0) > existing.get("score_hybrid", 0.0):
+                unique[index] = s
+                break
+
+    threshold = plan.get("min_score_threshold", 0.35)
+    unique = [
+        source
+        for source in unique
+        if float(source.get("score_hybrid", 0.0) or 0.0) >= threshold
+    ]
 
     # 5. Rerank 精排
     if plan.get("use_rerank", True) and unique:

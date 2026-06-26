@@ -27,17 +27,15 @@ const T = {
   failed: "\u8bf7\u6c42\u5931\u8d25",
   unknown: "\u672a\u77e5\u9519\u8bef",
   noResults: "\u6ca1\u6709\u5339\u914d\u7684\u4f1a\u8bdd",
+  noRecent: "\u6682\u65e0\u5bf9\u8bdd\u8bb0\u5f55",
   graphTitle: "\u5b66\u9662\u8d44\u6599\u77e5\u8bc6\u56fe\u8c31",
   graphDesc: "\u6309\u8d44\u6599\u7c7b\u578b\u548c\u5e38\u89c1\u95ee\u9898\u7ec4\u7ec7\uff0c\u7528\u4e8e\u5feb\u901f\u5b9a\u4f4d\u653f\u7b56\u3001\u6d41\u7a0b\u3001\u65f6\u95f4\u548c\u529e\u4e8b\u6750\u6599\u3002",
 };
 
-const recentTasks = [
+const seedPrompts = [
   "\u8ba1\u7b97\u673a\u5b66\u9662\u529e\u516c\u65f6\u95f4\u662f\u4ec0\u4e48\uff1f",
   "\u6bd5\u4e1a\u5b66\u5206\u8981\u6c42\u662f\u591a\u5c11\uff1f",
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
-  "\u5956\u5b66\u91d1\u8bc4\u5b9a\u89c4\u5219\u662f\u4ec0\u4e48\uff1f",
-  "\u8bf7\u5047\u6d41\u7a0b\u600e\u4e48\u8d70\uff1f",
-  "\u8bfe\u7a0b\u91cd\u4fee\u600e\u4e48\u7533\u8bf7\uff1f",
 ];
 
 const graphNodes = [
@@ -49,13 +47,23 @@ const graphNodes = [
   "\u5e38\u89c1\u95ee\u9898",
 ];
 
-const commonPrompts = recentTasks.slice(0, 3);
-
 type IconName = "plus" | "chat" | "book" | "search" | "panel" | "edit" | "send" | "stop";
 type ActiveView = "chat" | "knowledge";
 
+interface Conversation {
+  id: string;
+  title: string;
+  messages: Message[];
+  backendSessionId: string | null;
+  updatedAt: number;
+}
+
 function uid() {
   return Math.random().toString(36).slice(2);
+}
+
+function titleFromQuestion(question: string) {
+  return question.length > 22 ? `${question.slice(0, 22)}...` : question;
 }
 
 function Icon({ name, className = "" }: { name: IconName; className?: string }) {
@@ -95,13 +103,13 @@ function KnowledgeGraph() {
     <div className="flex flex-1 items-center justify-center overflow-y-auto px-5 py-10">
       <div className="w-full max-w-5xl">
         <div className="text-center">
-          <p className="text-sm font-semibold text-[#3f74f6]">{T.knowledge}</p>
+          <p className="text-sm font-semibold text-[#111827]">{T.knowledge}</p>
           <h2 className="mt-4 text-3xl font-bold text-slate-950 sm:text-4xl">{T.graphTitle}</h2>
           <p className="mx-auto mt-4 max-w-3xl text-base leading-7 text-slate-500">{T.graphDesc}</p>
         </div>
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {graphNodes.map((node) => (
-            <button key={node} type="button" className="min-h-28 rounded-lg border border-white/80 bg-white/90 px-5 py-4 text-left shadow-sm transition hover:border-blue-200 hover:text-[#315fd8] hover:shadow-md">
+            <button key={node} type="button" className="min-h-28 rounded-lg border border-[#e5e7eb] bg-white px-5 py-4 text-left shadow-sm transition hover:border-[#d1d5db] hover:text-[#111827] hover:shadow-md">
               <span className="block text-lg font-semibold text-slate-800">{node}</span>
               <span className="mt-2 block text-sm leading-6 text-slate-500">{T.assistant}</span>
             </button>
@@ -113,23 +121,37 @@ function KnowledgeGraph() {
 }
 
 export default function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [ingestStatus, setIngestStatus] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const ingestFileRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);  const ingestFileRef = useRef<HTMLInputElement | null>(null);
 
-  const filteredTasks = useMemo(() => {
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
+    [activeConversationId, conversations]
+  );
+  const messages = activeConversation?.messages ?? [];
+
+  const recentConversations = useMemo(
+    () => [...conversations].sort((a, b) => b.updatedAt - a.updatedAt),
+    [conversations]
+  );
+
+  const filteredConversations = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
-    if (!keyword) return recentTasks;
-    return recentTasks.filter((task) => task.toLowerCase().includes(keyword));
-  }, [searchTerm]);
+    if (!keyword) return recentConversations;
+    return recentConversations.filter((conversation) => conversation.title.toLowerCase().includes(keyword));
+  }, [recentConversations, searchTerm]);
 
   const uploadAndIngest = useCallback(async (file: File) => {
     if (ingesting) return;
@@ -178,16 +200,42 @@ export default function ChatInterface() {
     void uploadAndIngest(file);
   }, [uploadAndIngest]);
 
+  const updateConversation = (conversationId: string, updater: (conversation: Conversation) => Conversation) => {
+    setConversations((prev) => prev.map((conversation) => (conversation.id === conversationId ? updater(conversation) : conversation)));
+  };
+
   const submitQuestion = useCallback(async (value?: string) => {
     const question = (value ?? input).trim();
     if (!question || loading) return;
 
     setActiveView("chat");
+
+    const conversationId = activeConversation?.id ?? uid();
+    const backendSessionId = activeConversation?.backendSessionId ?? null;
     const userMsg: Message = { id: uid(), role: "user", content: question };
     const assistantId = uid();
     const assistantMsg: Message = { id: assistantId, role: "assistant", content: "", streaming: true };
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    if (!activeConversation) {
+      setConversations((prev) => [
+        {
+          id: conversationId,
+          title: titleFromQuestion(question),
+          messages: [userMsg, assistantMsg],
+          backendSessionId: null,
+          updatedAt: Date.now(),
+        },
+        ...prev,
+      ]);
+      setActiveConversationId(conversationId);
+    } else {
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        messages: [...conversation.messages, userMsg, assistantMsg],
+        updatedAt: Date.now(),
+      }));
+    }
+
     setInput("");
     setLoading(true);
     abortRef.current?.abort();
@@ -197,7 +245,7 @@ export default function ChatInterface() {
       const res = await fetch(`${API_BASE}/api/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, session_id: sessionId }),
+        body: JSON.stringify({ question, session_id: backendSessionId }),
         signal: abortRef.current.signal,
       });
 
@@ -208,6 +256,7 @@ export default function ChatInterface() {
       let buffer = "";
       let fullAnswer = "";
       let citations: Citation[] = [];
+      let nextBackendSessionId = backendSessionId;
 
       while (true) {
         const { done, value: chunk } = await reader.read();
@@ -225,11 +274,17 @@ export default function ChatInterface() {
             const event = JSON.parse(raw);
             if (event.type === "token") {
               fullAnswer += event.content;
-              setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: fullAnswer } : m)));
+              updateConversation(conversationId, (conversation) => ({
+                ...conversation,
+                messages: conversation.messages.map((message) =>
+                  message.id === assistantId ? { ...message, content: fullAnswer } : message
+                ),
+                updatedAt: Date.now(),
+              }));
             } else if (event.type === "citations") {
               citations = event.content;
             } else if (event.type === "done") {
-              if (event.session_id) setSessionId(event.session_id);
+              if (event.session_id) nextBackendSessionId = event.session_id;
               if (event.answer) fullAnswer = event.answer;
             }
           } catch {
@@ -238,14 +293,29 @@ export default function ChatInterface() {
         }
       }
 
-      setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: fullAnswer || T.noAnswer, citations, streaming: false } : m)));
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        backendSessionId: nextBackendSessionId,
+        messages: conversation.messages.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: fullAnswer || T.noAnswer, citations, streaming: false }
+            : message
+        ),
+        updatedAt: Date.now(),
+      }));
     } catch (err) {
       const msg = err instanceof Error && err.name === "AbortError" ? T.canceled : `${T.failed}: ${err instanceof Error ? err.message : T.unknown}`;
-      setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: msg, streaming: false } : m)));
+      updateConversation(conversationId, (conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((message) =>
+          message.id === assistantId ? { ...message, content: msg, streaming: false } : message
+        ),
+        updatedAt: Date.now(),
+      }));
     } finally {
       setLoading(false);
     }
-  }, [input, loading, sessionId]);
+  }, [activeConversation, input, loading]);
 
   const sendMessage = useCallback(async (e: FormEvent) => {
     e.preventDefault();
@@ -261,61 +331,79 @@ export default function ChatInterface() {
 
   const startNewChat = () => {
     abortRef.current?.abort();
-    setMessages([]);
+    setActiveConversationId(null);
     setInput("");
-    setSessionId(null);
+    setLoading(false);
+    setActiveView("chat");
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  };
+
+  const openConversation = (conversationId: string) => {
+    abortRef.current?.abort();
+    setActiveConversationId(conversationId);
+    setInput("");
     setLoading(false);
     setActiveView("chat");
   };
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-[#eef5fb] text-slate-900">
+    <div className="flex h-dvh overflow-hidden bg-white text-slate-900">
       {sidebarOpen && (
-        <aside className="hidden w-[clamp(260px,18vw,330px)] shrink-0 flex-col border-r border-slate-200 bg-white/88 px-3 py-4 shadow-[1px_0_0_rgba(148,163,184,0.18)] backdrop-blur lg:flex">
-          <div className="mb-5 flex h-10 items-center justify-end px-4">
-            <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700" aria-label={T.collapse} title={T.collapse}>
-              <span className="text-2xl leading-none">&lt;</span>
+        <aside className="hidden w-[clamp(236px,17vw,286px)] shrink-0 flex-col border-r border-[#e5e5e5] bg-white px-3 py-5 lg:flex">
+          <div className="mb-7 flex h-9 items-center justify-between px-2">
+            <h2 className="truncate text-lg font-bold leading-none text-black">{T.appTitle}</h2>
+            <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition hover:bg-[#f0f0f0] hover:text-black" aria-label={T.collapse} title={T.collapse}>
+              <Icon name="panel" className="h-6 w-6" />
             </button>
           </div>
 
-          <button type="button" onClick={startNewChat} className="flex h-11 w-full items-center justify-start gap-3 rounded-lg bg-[#3f74f6] px-5 text-base font-medium text-white shadow-sm transition hover:bg-[#3468e6]">
-            <Icon name="plus" />
+          <button type="button" onClick={startNewChat} className="flex h-11 w-full items-center justify-start gap-3 rounded-xl px-3 text-base font-medium text-black transition hover:bg-[#f0f0f0]">
+            <Icon name="edit" className="h-6 w-6" />
             {T.newChat}
           </button>
 
-          <nav className="mt-3 space-y-1">
-            <button type="button" onClick={() => setActiveView("chat")} className={`flex h-11 w-full items-center gap-3 rounded-lg px-4 text-left text-base transition ${activeView === "chat" ? "bg-[#eaf2ff] font-semibold text-[#315fd8]" : "font-medium text-slate-600 hover:bg-slate-100"}`}>
-              <Icon name="chat" />
+          {searchOpen ? (
+            <label className="mt-2 flex h-11 items-center gap-3 rounded-xl bg-[#f3f3f3] px-3 text-black ring-1 ring-[#e5e5e5]">
+              <Icon name="search" className="h-5 w-5 text-black" />
+              <input ref={searchInputRef} type="search" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={T.search} className="min-w-0 flex-1 bg-transparent text-sm font-medium text-black outline-none placeholder:text-[#777]" />
+              <button type="button" onClick={() => { setSearchTerm(""); setSearchOpen(false); }} className="rounded-md px-1 text-lg leading-none text-[#777] hover:bg-white hover:text-black" aria-label={T.all} title={T.all}>×</button>
+            </label>
+          ) : (
+            <button type="button" onClick={() => { setSearchOpen(true); window.setTimeout(() => searchInputRef.current?.focus(), 0); }} className="mt-2 flex h-11 w-full items-center justify-start gap-3 rounded-xl px-3 text-base font-medium text-black transition hover:bg-[#f0f0f0]">
+              <Icon name="search" className="h-6 w-6" />
+              {T.search}
+            </button>
+          )}
+
+          <nav className="mt-2 space-y-1">
+            <button type="button" onClick={() => setActiveView("chat")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "chat" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+              <Icon name="chat" className="h-6 w-6" />
               {T.unifiedChat}
             </button>
-            <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-lg px-4 text-left text-base transition ${activeView === "knowledge" ? "bg-[#eaf2ff] font-semibold text-[#315fd8]" : "font-medium text-slate-600 hover:bg-slate-100"}`}>
-              <Icon name="book" />
+            <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "knowledge" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+              <Icon name="book" className="h-6 w-6" />
               {T.knowledge}
             </button>
           </nav>
 
-          <label className="mt-5 flex h-11 items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 text-slate-400 shadow-sm focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-50">
-            <Icon name="search" className="text-slate-400" />
-            <input type="search" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder={T.search} className="min-w-0 flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400" />
-          </label>
-
-          <div className="mt-3 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">
-            {T.total}: {recentTasks.length}
+          <div className="mt-4 px-3 text-xs font-medium text-[#7a7a7a]">
+            {T.total}: {conversations.length}
           </div>
 
-          <div className="mt-4 flex min-h-0 flex-1 flex-col">
-            <div className="mb-2 flex items-center justify-between px-3 text-sm text-slate-500">
-              <span>{T.recent}</span>
-              <button type="button" onClick={() => setSearchTerm("")} className="font-medium text-[#3f74f6] hover:text-[#2f60d8]">{T.all}</button>
+          <div className="mt-5 flex min-h-0 flex-1 flex-col">
+            <div className="mb-3 flex items-center justify-between px-2">
+              <h3 className="text-base font-bold text-black">{T.recent}</h3>
+              <button type="button" onClick={() => setSearchTerm("")} className="text-sm font-medium text-[#5f5f5f] hover:text-black">{T.all}</button>
             </div>
             <div className="min-h-0 space-y-1 overflow-y-auto pr-1">
-              {filteredTasks.length === 0 ? (
-                <p className="px-3 py-3 text-sm text-slate-400">{T.noResults}</p>
+              {conversations.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#8a8a8a]">{T.noRecent}</p>
+              ) : filteredConversations.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#8a8a8a]">{T.noResults}</p>
               ) : (
-                filteredTasks.map((task, index) => (
-                  <button key={task} type="button" onClick={() => void submitQuestion(task)} disabled={loading} className={`w-full rounded-lg px-3 py-2.5 text-left transition disabled:opacity-50 ${index === 0 && !searchTerm ? "bg-[#eaf2ff]" : "hover:bg-slate-100"}`}>
-                    <span className="block truncate text-base font-semibold text-slate-800">{task}</span>
-                    <span className="mt-1 block text-sm text-slate-400">{T.assistant}</span>
+                filteredConversations.map((conversation) => (
+                  <button key={conversation.id} type="button" onClick={() => openConversation(conversation.id)} className={`w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-black transition ${conversation.id === activeConversationId ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+                    <span className="block truncate">{conversation.title}</span>
                   </button>
                 ))
               )}
@@ -323,13 +411,12 @@ export default function ChatInterface() {
           </div>
         </aside>
       )}
-
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-20 shrink-0 items-center border-b border-slate-200 bg-white/88 px-5 backdrop-blur">
+        <header className="flex h-20 shrink-0 items-center border-b border-[#e5e7eb] bg-white px-5">
           <div className="flex w-24 items-center gap-4 text-slate-500">
-            <button type="button" onClick={() => setSidebarOpen((open) => !open)} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 lg:flex" aria-label={sidebarOpen ? T.collapse : T.expand} title={sidebarOpen ? T.collapse : T.expand}><Icon name="panel" /></button>
-            <button type="button" onClick={startNewChat} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 lg:flex" aria-label={T.create} title={T.create}><Icon name="edit" /></button>
-            <button type="button" onClick={startNewChat} className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 lg:hidden" aria-label={T.create} title={T.create}><Icon name="plus" /></button>
+            <button type="button" onClick={() => setSidebarOpen((open) => !open)} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:flex" aria-label={sidebarOpen ? T.collapse : T.expand} title={sidebarOpen ? T.collapse : T.expand}><Icon name="panel" /></button>
+            <button type="button" onClick={startNewChat} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:flex" aria-label={T.create} title={T.create}><Icon name="edit" /></button>
+            <button type="button" onClick={startNewChat} className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:hidden" aria-label={T.create} title={T.create}><Icon name="plus" /></button>
           </div>
 
           <div className="mx-auto min-w-0 px-4 text-center">
@@ -359,21 +446,21 @@ export default function ChatInterface() {
           </div>
         </header>
 
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_90%_88%,rgba(140,229,222,0.46),transparent_30%),linear-gradient(120deg,#f8fbff_0%,#eff6ff_48%,#effbf9_100%)]">
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
           {activeView === "knowledge" ? (
             <KnowledgeGraph />
           ) : (
-            <MessageList messages={messages} onPromptClick={(prompt) => void submitQuestion(prompt)} quickPrompts={commonPrompts} />
+            <MessageList messages={messages} onPromptClick={(prompt) => void submitQuestion(prompt)} quickPrompts={seedPrompts} />
           )}
 
           {activeView === "chat" && (
-            <div className="shrink-0 px-3 pb-4 pt-2 sm:px-6 lg:px-10">
-              <form onSubmit={sendMessage} className="mx-auto flex min-h-[96px] w-full max-w-[min(980px,calc(100vw-3rem))] items-end gap-3 rounded-2xl border border-white/80 bg-white/90 p-4 shadow-[0_18px_45px_rgba(100,116,139,0.16)] backdrop-blur focus-within:ring-4 focus-within:ring-blue-100">
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={T.placeholder} disabled={loading} rows={2} className="max-h-36 min-h-14 flex-1 resize-none bg-transparent text-lg leading-7 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-50" />
+            <div className="shrink-0 bg-white px-3 pb-4 pt-2 sm:px-6 lg:px-10">
+              <form onSubmit={sendMessage} className="mx-auto flex min-h-[96px] w-full max-w-[min(980px,calc(100vw-3rem))] items-end gap-3 rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-[0_18px_45px_rgba(17,24,39,0.10)] focus-within:ring-4 focus-within:ring-[#f3f4f6]">
+                <textarea ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={T.placeholder} disabled={loading} rows={2} className="max-h-36 min-h-14 flex-1 resize-none bg-transparent text-lg leading-7 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-50" />
                 {loading ? (
-                  <button type="button" onClick={() => abortRef.current?.abort()} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100" aria-label={T.stop} title={T.stop}><Icon name="stop" /></button>
+                  <button type="button" onClick={() => abortRef.current?.abort()} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-slate-600 transition hover:bg-[#f3f4f6]" aria-label={T.stop} title={T.stop}><Icon name="stop" /></button>
                 ) : (
-                  <button type="submit" disabled={!input.trim()} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#82a9ff] text-white shadow-sm transition hover:bg-[#6f98f4] disabled:cursor-not-allowed disabled:bg-slate-300" aria-label={T.send} title={T.send}><Icon name="send" className="h-6 w-6" /></button>
+                  <button type="submit" disabled={!input.trim()} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#111827] text-white shadow-sm transition hover:bg-black disabled:cursor-not-allowed disabled:bg-slate-300" aria-label={T.send} title={T.send}><Icon name="send" className="h-6 w-6" /></button>
                 )}
               </form>
             </div>
@@ -383,3 +470,4 @@ export default function ChatInterface() {
     </div>
   );
 }
+

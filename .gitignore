@@ -31,3 +31,5 @@ Thumbs.db
 # Data
 backend/data/raw/*
 !backend/data/raw/.gitkeep
+
+/agents

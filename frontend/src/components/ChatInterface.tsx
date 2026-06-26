@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useRef, useState } from "react";
 import MessageList, { Citation, Message } from "./MessageList";
 
 const API_BASE =
@@ -17,10 +17,9 @@ export default function ChatInterface() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const sendMessage = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-      const question = input.trim();
+  const submitQuestion = useCallback(
+    async (value?: string) => {
+      const question = (value ?? input).trim();
       if (!question || loading) return;
 
       const userMsg: Message = {
@@ -65,10 +64,10 @@ export default function ChatInterface() {
         let citations: Citation[] = [];
 
         while (true) {
-          const { done, value } = await reader.read();
+          const { done, value: chunk } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
+          buffer += decoder.decode(chunk, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
@@ -83,9 +82,7 @@ export default function ChatInterface() {
                 fullAnswer += event.content;
                 setMessages((prev) =>
                   prev.map((m) =>
-                    m.id === assistantId
-                      ? { ...m, content: fullAnswer }
-                      : m
+                    m.id === assistantId ? { ...m, content: fullAnswer } : m
                   )
                 );
               } else if (event.type === "citations") {
@@ -119,9 +116,7 @@ export default function ChatInterface() {
             : `请求失败：${err instanceof Error ? err.message : "未知错误"}`;
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: msg, streaming: false }
-              : m
+            m.id === assistantId ? { ...m, content: msg, streaming: false } : m
           )
         );
       } finally {
@@ -131,29 +126,149 @@ export default function ChatInterface() {
     [input, loading, sessionId]
   );
 
+  const sendMessage = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      await submitQuestion();
+    },
+    [submitQuestion]
+  );
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submitQuestion();
+    }
+  };
+
+  const stopStreaming = () => {
+    abortRef.current?.abort();
+  };
+
+  const startNewChat = () => {
+    abortRef.current?.abort();
+    setMessages([]);
+    setInput("");
+    setSessionId(null);
+    setLoading(false);
+  };
+
   return (
-    <div className="flex min-h-[70vh] flex-1 flex-col rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
-      <MessageList messages={messages} />
-      <form
-        onSubmit={sendMessage}
-        className="flex gap-2 border-t border-slate-100 p-3"
-      >
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="输入您的问题…"
-          disabled={loading}
-          className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
-        />
+    <div className="mx-auto flex min-h-screen w-full max-w-7xl gap-4 p-3 md:p-5">
+      <aside className="hidden w-72 shrink-0 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:flex">
+        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-sm font-semibold text-white">
+            CS
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-950">学院问答智能体</p>
+            <p className="mt-0.5 text-xs text-slate-500">RAG · SSE · Knowledge QA</p>
+          </div>
+        </div>
+
         <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          type="button"
+          onClick={startNewChat}
+          className="mt-4 flex h-10 items-center justify-center rounded-xl bg-slate-950 px-3 text-sm font-medium text-white transition hover:bg-slate-800"
         >
-          {loading ? "发送中…" : "发送"}
+          + 新对话
         </button>
-      </form>
+
+        <div className="mt-5 space-y-2">
+          <p className="px-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+            常用入口
+          </p>
+          {["办公时间", "学分要求", "办事流程"].map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => void submitQuestion(item)}
+              disabled={loading}
+              className="block w-full rounded-xl px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 disabled:opacity-50"
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-800">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            服务状态
+          </div>
+          <p className="text-xs leading-5 text-slate-500">
+            前端默认连接 {API_BASE}，后端启动后即可流式回答。
+          </p>
+        </div>
+      </aside>
+
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <header className="flex min-h-16 items-center justify-between border-b border-slate-100 px-4 md:px-6">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-base font-semibold text-slate-950 md:text-lg">
+                计算机学院智能问答系统
+              </h1>
+              <span className="hidden rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 md:inline-flex">
+                在线
+              </span>
+            </div>
+            <p className="mt-1 truncate text-xs text-slate-500">
+              面向学院政策、流程和资料的智能问答助手
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={startNewChat}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 lg:hidden"
+          >
+            新对话
+          </button>
+        </header>
+
+        <MessageList
+          messages={messages}
+          onPromptClick={(prompt) => void submitQuestion(prompt)}
+        />
+
+        <div className="border-t border-slate-100 bg-white p-3 md:p-4">
+          <form
+            onSubmit={sendMessage}
+            className="mx-auto flex max-w-4xl items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 shadow-sm transition focus-within:border-blue-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-50"
+          >
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入您的问题..."
+              disabled={loading}
+              rows={1}
+              className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-50"
+            />
+            {loading ? (
+              <button
+                type="button"
+                onClick={stopStreaming}
+                className="h-11 shrink-0 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-lg font-semibold text-white shadow-sm shadow-blue-100 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                aria-label="发送"
+              >
+                ↑
+              </button>
+            )}
+          </form>
+          <p className="mt-2 text-center text-xs text-slate-400">
+            Enter 发送，Shift + Enter 换行
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

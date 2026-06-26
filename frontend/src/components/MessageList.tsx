@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface Message {
   id: string;
@@ -31,8 +31,13 @@ const T = {
   referencesPrefix: "\u53c2\u8003",
   referencesSuffix: "\u6761\u8d44\u6599\u6765\u6e90",
   copy: "\u590d\u5236",
+  copied: "\u5df2\u590d\u5236",
+  copyFailed: "\u590d\u5236\u5931\u8d25",
   like: "\u8d5e\u540c",
   dislike: "\u4e0d\u8d5e\u540c",
+  selected: "\u5df2\u9009\u62e9",
+  expandRefs: "\u5c55\u5f00\u53c2\u8003\u6765\u6e90",
+  collapseRefs: "\u6536\u8d77\u53c2\u8003\u6765\u6e90",
 };
 
 const defaultPrompts = [
@@ -40,6 +45,8 @@ const defaultPrompts = [
   "\u6bd5\u4e1a\u5b66\u5206\u8981\u6c42\u662f\u591a\u5c11\uff1f",
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
 ];
+
+type FeedbackValue = "like" | "dislike";
 
 function CopyIcon() {
   return (
@@ -71,9 +78,7 @@ function ThumbIcon({ down = false }: { down?: boolean }) {
 }
 
 function renderContent(content: string, streaming?: boolean) {
-  if (!content && streaming) {
-    return <p className="text-slate-500">{T.thinking}</p>;
-  }
+  if (!content && streaming) return <p className="text-slate-500">{T.thinking}</p>;
 
   return content.split("\n").map((line, index) => {
     const trimmed = line.trim();
@@ -95,11 +100,7 @@ function renderContent(content: string, streaming?: boolean) {
     const text = trimmed.replace(/^(?:[-*]|\u2022)\s+/, "").replace(/^\d+[.\u3001]\s*/, "");
 
     if (isHeading) {
-      return (
-        <h2 key={index} className="mt-6 text-xl font-bold text-slate-950 first:mt-0">
-          {heading}
-        </h2>
-      );
+      return <h2 key={index} className="mt-6 text-xl font-bold text-slate-950 first:mt-0">{heading}</h2>;
     }
 
     if (isBullet) {
@@ -111,20 +112,45 @@ function renderContent(content: string, streaming?: boolean) {
       );
     }
 
-    return (
-      <p key={index} className="text-lg leading-10 text-slate-800">
-        {trimmed}
-      </p>
-    );
+    return <p key={index} className="text-lg leading-10 text-slate-800">{trimmed}</p>;
   });
 }
 
 export default function MessageList({ messages, onPromptClick, quickPrompts = defaultPrompts }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const [expandedRefs, setExpandedRefs] = useState<Record<string, boolean>>({});
+  const [feedback, setFeedback] = useState<Record<string, FeedbackValue>>({});
+  const [copyState, setCopyState] = useState<Record<string, "copied" | "failed">>({});
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  const copyMessage = async (id: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyState((prev) => ({ ...prev, [id]: "copied" }));
+    } catch {
+      setCopyState((prev) => ({ ...prev, [id]: "failed" }));
+    }
+
+    window.setTimeout(() => {
+      setCopyState((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }, 1800);
+  };
+
+  const toggleFeedback = (id: string, value: FeedbackValue) => {
+    setFeedback((prev) => {
+      const next = { ...prev };
+      if (next[id] === value) delete next[id];
+      else next[id] = value;
+      return next;
+    });
+  };
 
   if (messages.length === 0) {
     return (
@@ -158,6 +184,11 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
             );
           }
 
+          const refsOpen = !!expandedRefs[msg.id];
+          const feedbackValue = feedback[msg.id];
+          const copied = copyState[msg.id] === "copied";
+          const copyFailed = copyState[msg.id] === "failed";
+
           return (
             <article key={msg.id} className="max-w-5xl text-slate-900">
               <div className="space-y-1">{renderContent(msg.content, msg.streaming)}</div>
@@ -172,26 +203,34 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
 
               {msg.citations && msg.citations.length > 0 && (
                 <div className="mt-7 border-t border-slate-200 pt-5">
-                  <button type="button" className="inline-flex items-center gap-2 text-base font-semibold text-slate-500 hover:text-slate-800">
+                  <button type="button" onClick={() => setExpandedRefs((prev) => ({ ...prev, [msg.id]: !prev[msg.id] }))} className="inline-flex items-center gap-2 text-base font-semibold text-slate-500 hover:text-slate-800" aria-expanded={refsOpen} title={refsOpen ? T.collapseRefs : T.expandRefs}>
                     {T.referencesPrefix} {msg.citations.length} {T.referencesSuffix}
-                    <span className="text-xl leading-none">?</span>
+                    <span className={`text-xl leading-none transition ${refsOpen ? "rotate-90" : ""}`}>{">"}</span>
                   </button>
-                  <div className="mt-3 grid gap-2 md:grid-cols-2">
-                    {msg.citations.slice(0, 4).map((c, i) => (
-                      <div key={`${c.doc_id}-${i}`} className="rounded-lg bg-white/70 px-3 py-2 text-sm leading-6 text-slate-500">
-                        <span className="mr-2 font-semibold text-slate-700">{c.doc_id}</span>
-                        {c.snippet}
-                      </div>
-                    ))}
-                  </div>
+                  {refsOpen && (
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {msg.citations.slice(0, 4).map((c, i) => (
+                        <div key={`${c.doc_id}-${i}`} className="rounded-lg bg-white/70 px-3 py-2 text-sm leading-6 text-slate-500">
+                          <span className="mr-2 font-semibold text-slate-700">{c.doc_id}</span>
+                          {c.snippet}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
               {!msg.streaming && (
                 <div className="mt-8 flex items-center gap-5 text-slate-500">
-                  <button type="button" className="hover:text-slate-800" aria-label={T.copy} title={T.copy}><CopyIcon /></button>
-                  <button type="button" className="hover:text-slate-800" aria-label={T.like} title={T.like}><ThumbIcon /></button>
-                  <button type="button" className="hover:text-slate-800" aria-label={T.dislike} title={T.dislike}><ThumbIcon down /></button>
+                  <button type="button" onClick={() => void copyMessage(msg.id, msg.content)} className={`hover:text-slate-800 ${copied ? "text-[#315fd8]" : copyFailed ? "text-red-500" : ""}`} aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy} title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}>
+                    <CopyIcon />
+                  </button>
+                  <button type="button" onClick={() => toggleFeedback(msg.id, "like")} className={`hover:text-slate-800 ${feedbackValue === "like" ? "text-[#315fd8]" : ""}`} aria-label={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like} title={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like}>
+                    <ThumbIcon />
+                  </button>
+                  <button type="button" onClick={() => toggleFeedback(msg.id, "dislike")} className={`hover:text-slate-800 ${feedbackValue === "dislike" ? "text-[#315fd8]" : ""}`} aria-label={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike} title={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike}>
+                    <ThumbIcon down />
+                  </button>
                 </div>
               )}
             </article>
@@ -202,4 +241,3 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
     </div>
   );
 }
-

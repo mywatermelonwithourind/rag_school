@@ -23,8 +23,6 @@ interface MessageListProps {
   quickPrompts?: string[];
 }
 
-type FeedbackValue = "like" | "dislike";
-
 type MarkdownBlock =
   | { type: "paragraph"; text: string }
   | { type: "heading"; level: number; text: string }
@@ -41,9 +39,6 @@ const T = {
   copy: "\u590d\u5236",
   copied: "\u5df2\u590d\u5236",
   copyFailed: "\u590d\u5236\u5931\u8d25",
-  like: "\u8d5e\u540c",
-  dislike: "\u4e0d\u8d5e\u540c",
-  selected: "\u5df2\u9009\u62e9",
   expandRefs: "\u5c55\u5f00\u53c2\u8003\u6765\u6e90",
   collapseRefs: "\u6536\u8d77\u53c2\u8003\u6765\u6e90",
   code: "\u4ee3\u7801",
@@ -74,22 +69,10 @@ function CodeIcon() {
   );
 }
 
-function ThumbIcon({ down = false }: { down?: boolean }) {
+function CheckIcon() {
   return (
     <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {down ? (
-        <>
-          <path d="M17 14V3" />
-          <path d="M7 10v11" />
-          <path d="M17 3h-5.4a2 2 0 0 0-1.8 1.1L7 10v11h9.7a2 2 0 0 0 2-1.7l.7-5A2 2 0 0 0 17.4 12H14" />
-        </>
-      ) : (
-        <>
-          <path d="M7 10v11" />
-          <path d="M17 14V3" />
-          <path d="M7 21h5.4a2 2 0 0 0 1.8-1.1L17 14V3H7.3a2 2 0 0 0-2 1.7l-.7 5A2 2 0 0 0 6.6 12H10" />
-        </>
-      )}
+      <path d="m5 12 4 4L19 6" />
     </svg>
   );
 }
@@ -222,14 +205,14 @@ function MarkdownContent({ content, streaming }: { content: string; streaming?: 
       {blocks.map((block, index) => {
         if (block.type === "heading") {
           const HeadingTag = block.level === 1 ? "h2" : block.level === 2 ? "h3" : "h4";
-          const headingClass = block.level === 1 ? "text-2xl" : block.level === 2 ? "text-xl" : "text-lg";
-          return <HeadingTag key={index} className={`${headingClass} mt-5 font-bold leading-9 text-slate-950 first:mt-0`}>{renderInline(block.text)}</HeadingTag>;
+          const headingClass = block.level === 1 ? "text-xl" : block.level === 2 ? "text-lg" : "text-base";
+          return <HeadingTag key={index} className={`${headingClass} mt-4 font-bold leading-8 text-slate-950 first:mt-0`}>{renderInline(block.text)}</HeadingTag>;
         }
 
         if (block.type === "list") {
           const ListTag = block.ordered ? "ol" : "ul";
           return (
-            <ListTag key={index} className={`space-y-2 pl-6 text-lg leading-9 text-slate-800 ${block.ordered ? "list-decimal" : "list-disc"}`}>
+            <ListTag key={index} className={`space-y-1.5 pl-5 text-base leading-8 text-slate-800 ${block.ordered ? "list-decimal" : "list-disc"}`}>
               {block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInline(item)}</li>)}
             </ListTag>
           );
@@ -239,7 +222,7 @@ function MarkdownContent({ content, streaming }: { content: string; streaming?: 
           return <CodeBlock key={index} language={block.language} code={block.code} />;
         }
 
-        return <p key={index} className="text-lg leading-10 text-slate-800">{renderInline(block.text)}</p>;
+        return <p key={index} className="text-base leading-8 text-slate-800">{renderInline(block.text)}</p>;
       })}
     </div>
   );
@@ -248,7 +231,6 @@ function MarkdownContent({ content, streaming }: { content: string; streaming?: 
 export default function MessageList({ messages, onPromptClick, quickPrompts = defaultPrompts }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const [expandedRefs, setExpandedRefs] = useState<Record<string, boolean>>({});
-  const [feedback, setFeedback] = useState<Record<string, FeedbackValue>>({});
   const [copyState, setCopyState] = useState<Record<string, "copied" | "failed">>({});
 
   useEffect(() => {
@@ -270,15 +252,6 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
         return next;
       });
     }, 1800);
-  };
-
-  const toggleFeedback = (id: string, value: FeedbackValue) => {
-    setFeedback((prev) => {
-      const next = { ...prev };
-      if (next[id] === value) delete next[id];
-      else next[id] = value;
-      return next;
-    });
   };
 
   if (messages.length === 0) {
@@ -308,20 +281,38 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
         {messages.map((msg) => {
           if (msg.role === "user") {
+            const copied = copyState[msg.id] === "copied";
+            const copyFailed = copyState[msg.id] === "failed";
+
             return (
-              <div key={msg.id} className="flex justify-end">
-                <div className="max-w-[78%] rounded-[28px] border border-[#e5e7eb] bg-[#eeeeee] px-6 py-4 text-lg leading-8 text-slate-950 shadow-sm">{msg.content}</div>
+              <div key={msg.id} className="flex items-end justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyMessage(msg.id, msg.content)}
+                  className={`relative mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all duration-200 ${
+                    copied
+                      ? "scale-110 bg-slate-900 text-white"
+                      : copyFailed
+                        ? "bg-slate-200 text-slate-900"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                  aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}
+                  title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}
+                >
+                  {copied && <span className="absolute inset-0 animate-ping rounded-full border border-slate-500" />}
+                  <span className="relative">{copied ? <CheckIcon /> : <CopyIcon />}</span>
+                </button>
+                <div className="max-w-[72%] rounded-2xl border border-[#e5e7eb] bg-[#eeeeee] px-4 py-3 text-base leading-7 text-slate-950 shadow-sm">{msg.content}</div>
               </div>
             );
           }
 
           const refsOpen = !!expandedRefs[msg.id];
-          const feedbackValue = feedback[msg.id];
           const copied = copyState[msg.id] === "copied";
           const copyFailed = copyState[msg.id] === "failed";
 
           return (
-            <article key={msg.id} className="max-w-5xl rounded-[28px] border border-[#e5e7eb] bg-[#eeeeee] px-6 py-5 text-slate-900 shadow-sm">
+            <article key={msg.id} className="max-w-4xl rounded-2xl border border-[#e5e7eb] bg-[#eeeeee] px-5 py-4 text-slate-900 shadow-sm">
               <MarkdownContent content={msg.content} streaming={msg.streaming} />
 
               {msg.streaming && msg.content && (
@@ -333,7 +324,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
               )}
 
               {msg.citations && msg.citations.length > 0 && (
-                <div className="mt-7 border-t border-[#dedede] pt-5">
+                <div className="mt-5 border-t border-[#dedede] pt-4">
                   <button type="button" onClick={() => setExpandedRefs((prev) => ({ ...prev, [msg.id]: !prev[msg.id] }))} className="inline-flex items-center gap-2 text-base font-semibold text-slate-500 hover:text-slate-800" aria-expanded={refsOpen} title={refsOpen ? T.collapseRefs : T.expandRefs}>
                     {T.referencesPrefix} {msg.citations.length} {T.referencesSuffix}
                     <span className={`text-xl leading-none transition ${refsOpen ? "rotate-90" : ""}`}>{">"}</span>
@@ -352,15 +343,10 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
               )}
 
               {!msg.streaming && (
-                <div className="mt-8 flex items-center gap-5 text-slate-500">
-                  <button type="button" onClick={() => void copyMessage(msg.id, msg.content)} className={`hover:text-slate-800 ${copied ? "text-[#111827]" : copyFailed ? "text-slate-900" : ""}`} aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy} title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}>
-                    <CopyIcon />
-                  </button>
-                  <button type="button" onClick={() => toggleFeedback(msg.id, "like")} className={`hover:text-slate-800 ${feedbackValue === "like" ? "text-[#111827]" : ""}`} aria-label={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like} title={feedbackValue === "like" ? `${T.selected}${T.like}` : T.like}>
-                    <ThumbIcon />
-                  </button>
-                  <button type="button" onClick={() => toggleFeedback(msg.id, "dislike")} className={`hover:text-slate-800 ${feedbackValue === "dislike" ? "text-[#111827]" : ""}`} aria-label={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike} title={feedbackValue === "dislike" ? `${T.selected}${T.dislike}` : T.dislike}>
-                    <ThumbIcon down />
+                <div className="mt-5 flex items-center text-slate-500">
+                  <button type="button" onClick={() => void copyMessage(msg.id, msg.content)} className={`relative flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 hover:bg-white hover:text-slate-900 ${copied ? "scale-110 bg-slate-900 text-white hover:bg-slate-900 hover:text-white" : copyFailed ? "bg-slate-200 text-slate-900" : ""}`} aria-label={copied ? T.copied : copyFailed ? T.copyFailed : T.copy} title={copied ? T.copied : copyFailed ? T.copyFailed : T.copy}>
+                    {copied && <span className="absolute inset-0 animate-ping rounded-full border border-slate-500" />}
+                    <span className="relative">{copied ? <CheckIcon /> : <CopyIcon />}</span>
                   </button>
                 </div>
               )}

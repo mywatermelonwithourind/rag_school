@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.config import get_settings
+from app.file_management.service import get_kb_file
 from app.retrieval.pipeline import fetch_parent_chunks_by_ids
 from app.workflow.llm_client import generate_answer
 from app.workflow.state import AgentState, Citation, SourceChunk
@@ -95,43 +96,101 @@ def _child_texts_and_offsets(source: SourceChunk) -> tuple[list[str], list[list[
     return child_texts, offsets
 
 
+def _source_file_id(source: SourceChunk) -> str:
+    return str(source.get("doc_id") or "")
+
+
+def _source_score(source: SourceChunk) -> float:
+    rerank_score = source.get("score_rerank")
+    if rerank_score is not None:
+        return float(rerank_score)
+    return _score(source)
+
+
+def _parent_offsets_from_file_detail(file_detail: dict) -> dict[str, int]:
+    offsets: dict[str, int] = {}
+    cursor = 0
+    parents = file_detail.get("parents") or []
+    for index, parent in enumerate(parents):
+        if index > 0:
+            cursor += 2  # get_kb_file 使用 "\n\n" 拼接父块。
+        parent_id = str(parent.get("parent_chunk_id") or "")
+        offsets[parent_id] = cursor
+        cursor += len(str(parent.get("content") or ""))
+    return offsets
+
+
 def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citation]:
     settings = get_settings()
     threshold = settings.rerank_display_threshold
-    citations: list[Citation] = []
-    seen_parent_ids: set[str] = set()
+    sources_by_file: dict[str, list[SourceChunk]] = {}
 
     for source in sources:
-        parent_id = source["parent_chunk_id"]
-        if parent_id in seen_parent_ids:
+        file_id = _source_file_id(source)
+        if not file_id:
             continue
-        seen_parent_ids.add(parent_id)
+        sources_by_file.setdefault(file_id, []).append(source)
 
-        rerank_score = source.get("score_rerank")
-        score = _score(source)
-        if rerank_score is not None and float(rerank_score) < threshold:
+    citations: list[Citation] = []
+    for file_id, file_sources in sources_by_file.items():
+        file_score = max((_source_score(source) for source in file_sources), default=0.0)
+        if file_score < threshold:
             continue
 
-        child_texts, child_offsets = _child_texts_and_offsets(source)
+        try:
+            file_detail = get_kb_file(file_id)
+        except Exception:
+            continue
+
+        full_text = str(file_detail.get("full_text") or "")
+        parent_starts = _parent_offsets_from_file_detail(file_detail)
+        highlight_offsets: list[list[int]] = []
+        child_texts: list[str] = []
+        seen_offsets: set[tuple[int, int]] = set()
+
+        for source in file_sources:
+            if _source_score(source) < threshold:
+                continue
+            parent_start = parent_starts.get(source["parent_chunk_id"])
+            if parent_start is None:
+                continue
+            source_child_texts, source_child_offsets = _child_texts_and_offsets(source)
+            child_texts.extend(source_child_texts)
+            for start, end in source_child_offsets:
+                full_start = parent_start + start
+                full_end = parent_start + end
+                if full_start < 0 or full_end > len(full_text) or full_start >= full_end:
+                    continue
+                offset_key = (full_start, full_end)
+                if offset_key in seen_offsets:
+                    continue
+                seen_offsets.add(offset_key)
+                highlight_offsets.append([full_start, full_end])
+
+        highlight_offsets.sort(key=lambda item: (item[0], item[1]))
+        first_source = max(file_sources, key=_source_score)
+        first_parent_id = first_source["parent_chunk_id"]
         citations.append(
             {
-                "parent_chunk_id": parent_id,
-                "doc_id": source["doc_id"],
-                "file_id": source["doc_id"],
-                "file_name": _display_name(source),
-                "passage_text": source["content"],
+                "parent_chunk_id": first_parent_id,
+                "doc_id": file_id,
+                "file_id": file_id,
+                "file_name": _display_name(first_source),
+                "full_text": full_text,
+                "highlight_offsets": highlight_offsets,
+                "reconstruction_notice": str(file_detail.get("reconstruction_notice") or ""),
+                "passage_text": full_text,
                 "child_text": child_texts[0] if child_texts else "",
                 "child_texts": child_texts,
-                "child_offsets": child_offsets,
-                "snippet": source["content"][:120],
-                "relevance_score": score,
-                "rerank_score": float(rerank_score) if rerank_score is not None else None,
+                "child_offsets": highlight_offsets,
+                "snippet": full_text[:120],
+                "relevance_score": file_score,
+                "rerank_score": file_score,
             }
         )
-        if len(citations) >= limit:
-            break
 
-    return citations
+    citations.sort(key=lambda item: float(item.get("rerank_score") or 0.0), reverse=True)
+    return citations[:limit]
 
 
 def answer_node(state: AgentState) -> AgentState:

@@ -15,6 +15,9 @@ class CitationSchema(BaseModel):
     doc_id: str
     file_id: str | None = None
     file_name: str | None = None
+    full_text: str | None = None
+    highlight_offsets: list[list[int]] = Field(default_factory=list)
+    reconstruction_notice: str | None = None
     passage_text: str | None = None
     child_text: str | None = None
     child_texts: list[str] = Field(default_factory=list)

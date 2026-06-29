@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy.dialects.mysql import insert
 
 from app.core.database import get_db_session
-from app.core.models import ParentChunkRecord
+from app.core.models import KbDocumentRecord, ParentChunkRecord
 from app.data.chunking import chunk_document
 from app.data.loader import load_document_from_bytes, load_documents_from_dir
 from app.retrieval.embedding import embed_texts
@@ -70,6 +70,56 @@ def _upsert_parent_chunks(parent_chunks: list[dict[str, Any]]) -> int:
     return len(rows)
 
 
+def _upsert_document_record(
+    *,
+    doc: dict[str, Any],
+    kb_id: str,
+    doc_id: str,
+    parent_count: int,
+    child_count: int,
+    vector_count: int,
+    warnings: list[str],
+    skipped: bool,
+) -> None:
+    metadata = dict(doc.get("metadata") or {})
+    table = KbDocumentRecord.__table__
+    status = "failed" if skipped else ("partial" if warnings else "ready")
+    row = {
+        "doc_id": doc_id,
+        "kb_id": kb_id,
+        "title": str(doc.get("title") or doc_id),
+        "source_name": str(metadata.get("source_name") or metadata.get("source_path") or doc.get("title") or doc_id),
+        "file_ext": str(metadata.get("format") or ""),
+        "source_type": str(metadata.get("source_type") or "directory"),
+        "source_path": metadata.get("source_path"),
+        "content_chars": len(str(doc.get("content") or "")),
+        "parent_count": parent_count,
+        "child_count": child_count,
+        "vector_count": vector_count,
+        "status": status,
+        "warnings": warnings,
+        "metadata": metadata,
+    }
+    with get_db_session() as db:
+        stmt = insert(table).values(row)
+        update_columns = {
+            "kb_id": stmt.inserted.kb_id,
+            "title": stmt.inserted.title,
+            "source_name": stmt.inserted.source_name,
+            "file_ext": stmt.inserted.file_ext,
+            "source_type": stmt.inserted.source_type,
+            "source_path": stmt.inserted.source_path,
+            "content_chars": stmt.inserted.content_chars,
+            "parent_count": stmt.inserted.parent_count,
+            "child_count": stmt.inserted.child_count,
+            "vector_count": stmt.inserted.vector_count,
+            "status": stmt.inserted.status,
+            "warnings": stmt.inserted.warnings,
+            "metadata": stmt.inserted["metadata"],
+        }
+        db.execute(stmt.on_duplicate_key_update(**update_columns))
+
+
 def _ingest_documents(
     docs: list[dict[str, Any]],
     *,
@@ -90,10 +140,22 @@ def _ingest_documents(
         warnings.extend(f"{doc.get('doc_id')}: {item}" for item in doc_warnings)
         if not doc.get("content"):
             skipped_docs.append(str(doc.get("doc_id", "unknown")))
+            _upsert_document_record(
+                doc=doc,
+                kb_id=kb_id,
+                doc_id=str(doc.get("doc_id", "unknown")),
+                parent_count=0,
+                child_count=0,
+                vector_count=0,
+                warnings=doc_warnings,
+                skipped=True,
+            )
             continue
 
         doc.setdefault("metadata", {})["kb_id"] = kb_id
         parents, children = chunk_document(doc)
+        doc_id = parents[0]["doc_id"] if parents else str(doc.get("doc_id", "unknown"))
+        doc_vector_upserts = 0
         total_parents += len(parents)
         total_children += len(children)
         total_parent_upserts += _upsert_parent_chunks(parents)
@@ -102,12 +164,25 @@ def _ingest_documents(
             texts = [c["content"] for c in children]
             try:
                 embeddings = embed_texts(texts)
-                total_vector_upserts += upsert_child_chunks(children, embeddings)
+                doc_vector_upserts = upsert_child_chunks(children, embeddings)
+                total_vector_upserts += doc_vector_upserts
             except Exception as exc:
                 message = f"{doc.get('doc_id')}: Milvus child chunk upsert skipped ({exc})"
                 if fail_on_vector_error:
                     raise RuntimeError(message) from exc
                 warnings.append(message)
+                doc_warnings.append(message)
+
+        _upsert_document_record(
+            doc=doc,
+            kb_id=kb_id,
+            doc_id=doc_id,
+            parent_count=len(parents),
+            child_count=len(children),
+            vector_count=doc_vector_upserts,
+            warnings=doc_warnings,
+            skipped=False,
+        )
 
     return {
         "docs": len(docs),

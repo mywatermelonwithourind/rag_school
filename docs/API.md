@@ -417,6 +417,46 @@ data: {"type":"done","session_id":"...","debug_trace":[...],"answer":"[MOCK LLM 
 
 ---
 
+## GET `/api/documents`
+
+### 用途
+
+展示知识库中已经入库的文件列表。前端知识库视图使用该接口。
+
+### 请求参数
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `kb_id` | `string` | `kb_cs_college` | 知识库 ID |
+| `limit` | `number` | `100` | 返回数量，范围 1–500 |
+
+### 响应体
+
+```json
+{
+  "total": 1,
+  "items": [
+    {
+      "doc_id": "sample_xxxxxxxx",
+      "kb_id": "kb_cs_college",
+      "title": "sample",
+      "source_name": "sample.pdf",
+      "file_ext": ".pdf",
+      "source_type": "upload",
+      "content_chars": 12000,
+      "parent_count": 4,
+      "child_count": 36,
+      "vector_count": 36,
+      "status": "ready",
+      "warnings": [],
+      "updated_at": "2026-06-29T12:00:00"
+    }
+  ]
+}
+```
+
+---
+
 ## 共享数据结构
 
 ### HistoryMessage

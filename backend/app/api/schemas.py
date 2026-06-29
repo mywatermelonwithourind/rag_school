@@ -49,3 +49,24 @@ class IngestResponse(BaseModel):
     vector_upserts: int
     source_dir: str
     warnings: list[str] = Field(default_factory=list)
+
+
+class KbDocumentSchema(BaseModel):
+    doc_id: str
+    kb_id: str
+    title: str
+    source_name: str
+    file_ext: str
+    source_type: str
+    content_chars: int
+    parent_count: int
+    child_count: int
+    vector_count: int
+    status: str
+    warnings: list[str] = Field(default_factory=list)
+    updated_at: str
+
+
+class KbDocumentListResponse(BaseModel):
+    total: int
+    items: list[KbDocumentSchema] = Field(default_factory=list)

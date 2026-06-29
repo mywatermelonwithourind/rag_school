@@ -6,6 +6,7 @@ import MessageList, { Citation, Message } from "./MessageList";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
 const T = {
+  sidebarTitle: "JMU_IT",
   appTitle: "\u8ba1\u7b97\u673a\u5b66\u9662\u667a\u80fd\u95ee\u7b54\u7cfb\u7edf",
   subtitle: "\u9762\u5411\u5b66\u9662\u653f\u7b56\u3001\u6d41\u7a0b\u548c\u8d44\u6599\u7684\u667a\u80fd\u95ee\u7b54\u52a9\u624b \u00b7 \u5185\u5bb9\u7531 AI \u751f\u6210\uff0c\u8bf7\u4ed4\u7ec6\u7504\u522b",
   assistant: "\u5b66\u9662\u95ee\u7b54\u667a\u80fd\u4f53",
@@ -561,7 +562,7 @@ export default function ChatInterface() {
       {sidebarOpen && (
         <aside className="hidden w-[clamp(236px,17vw,286px)] shrink-0 flex-col border-r border-[#e5e5e5] bg-white px-3 py-5 lg:flex">
           <div className="mb-7 flex h-9 items-center justify-between px-2">
-            <h2 className="truncate text-lg font-bold leading-none text-black">{T.appTitle}</h2>
+            <h2 className="truncate text-lg font-bold leading-none text-black">{T.sidebarTitle}</h2>
             <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition hover:bg-[#f0f0f0] hover:text-black" aria-label={T.collapse} title={T.collapse}>
               <Icon name="panel" className="h-6 w-6" />
             </button>

@@ -1,6 +1,7 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import FileManager from "./FileManager";
 import MessageList, { Citation, Message } from "./MessageList";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
@@ -9,9 +10,8 @@ const T = {
   sidebarTitle: "JMU_IT",
   appTitle: "\u8ba1\u7b97\u673a\u5b66\u9662\u667a\u80fd\u95ee\u7b54\u7cfb\u7edf",
   subtitle: "\u9762\u5411\u5b66\u9662\u653f\u7b56\u3001\u6d41\u7a0b\u548c\u8d44\u6599\u7684\u667a\u80fd\u95ee\u7b54\u52a9\u624b \u00b7 \u5185\u5bb9\u7531 AI \u751f\u6210\uff0c\u8bf7\u4ed4\u7ec6\u7504\u522b",
-  assistant: "\u5b66\u9662\u95ee\u7b54\u667a\u80fd\u4f53",
   newChat: "\u65b0\u5efa\u5bf9\u8bdd",
-  knowledge: "\u77e5\u8bc6\u56fe\u8c31",
+  fileManager: "\u6587\u4ef6\u7ba1\u7406",
   search: "\u641c\u7d22\u4f1a\u8bdd",
   total: "\u4f1a\u8bdd\u603b\u6570",
   recent: "\u6700\u8fd1\u5bf9\u8bdd",
@@ -28,10 +28,6 @@ const T = {
   unknown: "\u672a\u77e5\u9519\u8bef",
   noResults: "\u6ca1\u6709\u5339\u914d\u7684\u4f1a\u8bdd",
   noRecent: "\u6682\u65e0\u5bf9\u8bdd\u8bb0\u5f55",
-  graphTitle: "\u5b66\u9662\u8d44\u6599\u77e5\u8bc6\u56fe\u8c31",
-  graphDesc: "\u6309\u8d44\u6599\u7c7b\u578b\u548c\u5e38\u89c1\u95ee\u9898\u7ec4\u7ec7\uff0c\u7528\u4e8e\u5feb\u901f\u5b9a\u4f4d\u653f\u7b56\u3001\u6d41\u7a0b\u3001\u65f6\u95f4\u548c\u529e\u4e8b\u6750\u6599\u3002",
-  files: "\u77e5\u8bc6\u5e93\u6587\u4ef6",
-  noFiles: "\u6682\u65e0\u5165\u5e93\u6587\u4ef6",
 };
 
 const seedPrompts = [
@@ -40,17 +36,9 @@ const seedPrompts = [
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
 ];
 
-const graphNodes = [
-  "\u5b66\u9662\u653f\u7b56",
-  "\u529e\u4e8b\u6d41\u7a0b",
-  "\u6559\u52a1\u57f9\u517b",
-  "\u5956\u52a9\u8bc4\u5b9a",
-  "\u65f6\u95f4\u5b89\u6392",
-  "\u5e38\u89c1\u95ee\u9898",
-];
 
 type IconName = "plus" | "book" | "search" | "panel" | "edit" | "send" | "stop";
-type ActiveView = "chat" | "knowledge";
+type ActiveView = "chat" | "files";
 
 interface Conversation {
   id: string;
@@ -58,21 +46,6 @@ interface Conversation {
   messages: Message[];
   backendSessionId: string | null;
   updatedAt: number;
-}
-
-interface KbDocument {
-  doc_id: string;
-  title: string;
-  source_name: string;
-  file_ext: string;
-  source_type: string;
-  content_chars: number;
-  parent_count: number;
-  child_count: number;
-  vector_count: number;
-  status: string;
-  warnings: string[];
-  updated_at: string;
 }
 
 interface BackendSessionSummary {
@@ -136,99 +109,17 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
   }
 }
 
-function KnowledgeGraph({
-  documents,
-  loading,
-  error,
-  onRefresh,
-}: {
-  documents: KbDocument[];
-  loading: boolean;
-  error: string | null;
-  onRefresh: () => void;
-}) {
-  return (
-    <div className="flex flex-1 justify-center overflow-y-auto px-5 py-10">
-      <div className="w-full max-w-5xl">
-        <div className="text-center">
-          <p className="text-sm font-semibold text-[#111827]">{T.knowledge}</p>
-          <h2 className="mt-4 text-3xl font-bold text-slate-950 sm:text-4xl">{T.graphTitle}</h2>
-          <p className="mx-auto mt-4 max-w-3xl text-base leading-7 text-slate-500">{T.graphDesc}</p>
-        </div>
-
-        <section className="mt-10 rounded-xl border border-[#e5e7eb] bg-white shadow-sm">
-          <div className="flex min-h-14 items-center justify-between gap-3 border-b border-[#e5e7eb] px-5">
-            <div>
-              <h3 className="text-base font-bold text-black">{T.files}</h3>
-              <p className="mt-1 text-xs text-slate-500">{documents.length} files</p>
-            </div>
-            <button type="button" onClick={onRefresh} className="rounded-lg border border-[#e5e7eb] px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-[#f3f4f6]">
-              {"\u5237\u65b0"}
-            </button>
-          </div>
-          <div className="divide-y divide-[#f0f0f0]">
-            {loading ? (
-              <p className="px-5 py-6 text-sm text-slate-500">{"\u6b63\u5728\u52a0\u8f7d..."}</p>
-            ) : error ? (
-              <p className="px-5 py-6 text-sm text-red-600">{error}</p>
-            ) : documents.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-slate-500">{T.noFiles}</p>
-            ) : (
-              documents.map((doc) => (
-                <article key={doc.doc_id} className="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <h4 className="truncate text-sm font-bold text-slate-950">{doc.source_name || doc.title}</h4>
-                      <span className="rounded-md bg-[#f3f4f6] px-2 py-0.5 text-xs font-medium uppercase text-slate-500">{doc.file_ext || "doc"}</span>
-                      <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${doc.status === "ready" ? "bg-emerald-50 text-emerald-700" : doc.status === "partial" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"}`}>{doc.status}</span>
-                    </div>
-                    <p className="mt-1 truncate text-xs text-slate-500">{doc.doc_id}</p>
-                    {doc.warnings.length > 0 && (
-                      <p className="mt-2 truncate text-xs text-amber-700">{doc.warnings[0]}</p>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-4 gap-2 text-right text-xs text-slate-500 sm:min-w-[320px]">
-                    <span><b className="block text-sm text-slate-900">{doc.parent_count}</b>{"\u7236\u5757"}</span>
-                    <span><b className="block text-sm text-slate-900">{doc.child_count}</b>{"\u5b50\u5757"}</span>
-                    <span><b className="block text-sm text-slate-900">{doc.vector_count}</b>{"\u5411\u91cf"}</span>
-                    <span><b className="block text-sm text-slate-900">{doc.content_chars}</b>{"\u5b57\u7b26"}</span>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {graphNodes.map((node) => (
-            <button key={node} type="button" className="min-h-28 rounded-lg border border-[#e5e7eb] bg-white px-5 py-4 text-left shadow-sm transition hover:border-[#d1d5db] hover:text-[#111827] hover:shadow-md">
-              <span className="block text-lg font-semibold text-slate-800">{node}</span>
-              <span className="mt-2 block text-sm leading-6 text-slate-500">{T.assistant}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function ChatInterface() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [ingesting, setIngesting] = useState(false);
-  const [ingestStatus, setIngestStatus] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [searchTerm, setSearchTerm] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [kbDocuments, setKbDocuments] = useState<KbDocument[]>([]);
-  const [kbDocumentsLoading, setKbDocumentsLoading] = useState(false);
-  const [kbDocumentsError, setKbDocumentsError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const ingestFileRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeConversation = useMemo(
@@ -247,79 +138,6 @@ export default function ChatInterface() {
     if (!keyword) return recentConversations;
     return recentConversations.filter((conversation) => conversation.title.toLowerCase().includes(keyword));
   }, [recentConversations, searchTerm]);
-
-  const loadKbDocuments = useCallback(async () => {
-    setKbDocumentsLoading(true);
-    setKbDocumentsError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/documents?kb_id=kb_cs_college`);
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        const detail = data?.detail ? `：${data.detail}` : "";
-        throw new Error(`HTTP ${res.status}${detail}`);
-      }
-      setKbDocuments(Array.isArray(data?.items) ? data.items : []);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : T.unknown;
-      setKbDocumentsError(`\u6587\u4ef6\u5217\u8868\u52a0\u8f7d\u5931\u8d25\uff1a${message}`);
-    } finally {
-      setKbDocumentsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeView === "knowledge") {
-      void loadKbDocuments();
-    }
-  }, [activeView, loadKbDocuments]);
-
-  const uploadAndIngest = useCallback(async (file: File) => {
-    if (ingesting) return;
-    setIngesting(true);
-    setIngestStatus(`\u6b63\u5728\u6e05\u6d17\u5165\u5e93\uff1a${file.name}`);
-
-    try {
-      const body = new FormData();
-      body.append("file", file);
-      body.append("kb_id", "kb_cs_college");
-      body.append("write_vectors", "true");
-      body.append("fail_on_vector_error", "false");
-
-      const res = await fetch(`${API_BASE}/api/ingest/upload`, {
-        method: "POST",
-        body,
-      });
-
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        const detail = data?.detail ? `：${data.detail}` : "";
-        throw new Error(`HTTP ${res.status}${detail}`);
-      }
-
-      const warningText =
-        data.warnings?.length > 0 ? `\uff0c${data.warnings.length} \u6761\u63d0\u9192` : "";
-      setIngestStatus(
-        `${file.name}\uff1a\u5df2\u5165\u5e93 ${data.parent_upserts} \u4e2a\u7236\u5757\uff0c${data.vector_upserts} \u4e2a\u5411\u91cf${warningText}`
-      );
-      void loadKbDocuments();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "未知错误";
-      setIngestStatus(`\u5165\u5e93\u5931\u8d25\uff1a${message}`);
-    } finally {
-      setIngesting(false);
-    }
-  }, [ingesting, loadKbDocuments]);
-
-  const chooseIngestFile = useCallback(() => {
-    ingestFileRef.current?.click();
-  }, []);
-
-  const handleIngestFileChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    void uploadAndIngest(file);
-  }, [uploadAndIngest]);
 
   const updateConversation = (conversationId: string, updater: (conversation: Conversation) => Conversation) => {
     setConversations((prev) => prev.map((conversation) => (conversation.id === conversationId ? updater(conversation) : conversation)));
@@ -584,9 +402,9 @@ export default function ChatInterface() {
           )}
 
           <nav className="mt-2 space-y-1">
-            <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "knowledge" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
+            <button type="button" onClick={() => setActiveView("files")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "files" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
               <Icon name="book" className="h-6 w-6" />
-              {T.knowledge}
+              {T.fileManager}
             </button>
           </nav>
 
@@ -621,6 +439,7 @@ export default function ChatInterface() {
             <button type="button" onClick={() => setSidebarOpen((open) => !open)} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:flex" aria-label={sidebarOpen ? T.collapse : T.expand} title={sidebarOpen ? T.collapse : T.expand}><Icon name="panel" /></button>
             <button type="button" onClick={startNewChat} className="hidden h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:flex" aria-label={T.create} title={T.create}><Icon name="edit" /></button>
             <button type="button" onClick={startNewChat} className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:hidden" aria-label={T.create} title={T.create}><Icon name="plus" /></button>
+            <button type="button" onClick={() => setActiveView((view) => view === "files" ? "chat" : "files")} className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-[#f3f4f6] lg:hidden" aria-label={activeView === "files" ? "????" : T.fileManager} title={activeView === "files" ? "????" : T.fileManager}><Icon name="book" /></button>
           </div>
 
           <div className="mx-auto min-w-0 px-4 text-center">
@@ -628,36 +447,12 @@ export default function ChatInterface() {
             <p className="mt-2 truncate text-sm font-medium text-slate-500">{T.subtitle}</p>
           </div>
 
-          <div className="flex w-56 shrink-0 flex-col items-end gap-1">
-            <button
-              type="button"
-              onClick={chooseIngestFile}
-              disabled={ingesting || loading}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-[#315fd8] disabled:opacity-50"
-            >
-              {ingesting ? "\u5165\u5e93\u4e2d..." : "\u9009\u62e9\u6587\u4ef6\u5165\u5e93"}
-            </button>
-            <input
-              ref={ingestFileRef}
-              type="file"
-              accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              className="hidden"
-              onChange={handleIngestFileChange}
-            />
-            <span className="max-w-full truncate text-xs text-slate-400">
-              {ingestStatus || "PDF / DOCX / TXT / MD"}
-            </span>
-          </div>
+          <div className="w-24 shrink-0" />
         </header>
 
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
-          {activeView === "knowledge" ? (
-            <KnowledgeGraph
-              documents={kbDocuments}
-              loading={kbDocumentsLoading}
-              error={kbDocumentsError}
-              onRefresh={loadKbDocuments}
-            />
+          {activeView === "files" ? (
+            <FileManager apiBase={API_BASE} />
           ) : (
             <MessageList messages={messages} onPromptClick={(prompt) => void submitQuestion(prompt)} quickPrompts={seedPrompts} />
           )}

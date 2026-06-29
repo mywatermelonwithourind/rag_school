@@ -50,6 +50,13 @@ const defaultPrompts = [
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
 ];
 
+const thinkingSteps = [
+  "\u6b63\u5728\u7406\u89e3\u95ee\u9898",
+  "\u6b63\u5728\u641c\u7d22\u77e5\u8bc6\u5e93",
+  "\u6b63\u5728\u6574\u7406\u76f8\u5173\u8d44\u6599",
+  "\u6b63\u5728\u751f\u6210\u56de\u7b54",
+];
+
 function CopyIcon() {
   return (
     <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -197,9 +204,18 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 function ThinkingIndicator() {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setStep((current) => Math.min(current + 1, thinkingSteps.length - 1));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
     <div className="flex h-8 items-center gap-3 text-sm text-slate-500" role="status" aria-live="polite">
-      <span>{T.thinking}</span>
+      <span key={step} className="animate-pulse">{thinkingSteps[step]}</span>
       <span className="flex h-4 items-center gap-1" aria-hidden>
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-240ms]" />
         <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-120ms]" />

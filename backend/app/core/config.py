@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     milvus_port: int = 19530
     milvus_collection: str = "child_chunks"
     milvus_dim: int = 1024  # BGE-large 维度，按实际模型调整
+    milvus_timeout_seconds: float = Field(default=10.0, gt=0)
 
     # ----- LLM（百炼 deepseek 直连） -----
     llm_api_key: str = ""

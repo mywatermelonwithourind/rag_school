@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.core.config import get_settings
-from app.workflow.state import SourceChunk
+from app.retrieval.embedding import embed_texts
 
 _MILVUS_ALIAS = "rag_ingest"
+logger = logging.getLogger(__name__)
 
 
 def _connect_milvus() -> None:
@@ -18,6 +20,7 @@ def _connect_milvus() -> None:
         alias=_MILVUS_ALIAS,
         host=settings.milvus_host,
         port=str(settings.milvus_port),
+        timeout=float(settings.milvus_timeout_seconds),
     )
 
 
@@ -80,34 +83,70 @@ def search_child_chunks(query: str, top_k: int = 20) -> list[dict[str, Any]]:
     """
     Milvus 子块向量检索。
 
-    TODO(retrieval):
-        - connections.connect(host, port)
-        - collection.search(data=[embedding], anns_field="embedding", ...)
-
-    当前返回 mock 子块命中。
+    查询侧允许 embedding fallback；Milvus 不可用时返回空召回并记录日志，
+    由 pipeline 判定 retrieval_sufficient=False。
     """
     settings = get_settings()
-    _ = settings  # 后续连接 Milvus
+    if not query.strip() or top_k <= 0:
+        return []
 
-    q = query.lower()
-    if any(term in q for term in ("办公", "办公室", "上班", "工作时间", "地点", "地址")):
-        return [
-            {"child_chunk_id": "cc_001", "parent_chunk_id": "pc_office_hours", "score": 0.92},
-            {"child_chunk_id": "cc_001_b", "parent_chunk_id": "pc_office_hours", "score": 0.86},
-            {"child_chunk_id": "cc_004", "parent_chunk_id": "pc_office_location", "score": 0.74},
-            {"child_chunk_id": "cc_004_b", "parent_chunk_id": "pc_office_location", "score": 0.68},
-            {"child_chunk_id": "cc_003", "parent_chunk_id": "pc_graduation_req", "score": 0.31},
-        ][:top_k]
+    try:
+        query_vector = embed_texts([query])[0]
+        collection = _get_or_create_collection()
+        collection.load()
+        results = collection.search(
+            data=[query_vector],
+            anns_field="embedding",
+            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            limit=top_k,
+            output_fields=[
+                "child_chunk_id",
+                "parent_chunk_id",
+                "content",
+                "doc_id",
+                "kb_id",
+                "chunk_index",
+            ],
+            timeout=float(settings.milvus_timeout_seconds),
+        )
+    except Exception:
+        logger.exception("Milvus child chunk search failed; returning empty recall")
+        return []
 
-    if any(term in q for term in ("毕业", "学分", "必修", "选修")):
-        return [
-            {"child_chunk_id": "cc_003", "parent_chunk_id": "pc_graduation_req", "score": 0.89},
-            {"child_chunk_id": "cc_003_b", "parent_chunk_id": "pc_graduation_req", "score": 0.83},
-            {"child_chunk_id": "cc_005", "parent_chunk_id": "pc_graduation_process", "score": 0.72},
-            {"child_chunk_id": "cc_001", "parent_chunk_id": "pc_office_hours", "score": 0.35},
-        ][:top_k]
+    hits = results[0] if results else []
+    child_chunks: list[dict[str, Any]] = []
+    for hit in hits:
+        entity = getattr(hit, "entity", None)
+        child_chunks.append(
+            {
+                "child_chunk_id": _read_hit_value(hit, entity, "child_chunk_id"),
+                "parent_chunk_id": _read_hit_value(hit, entity, "parent_chunk_id"),
+                "content": _read_hit_value(hit, entity, "content"),
+                "doc_id": _read_hit_value(hit, entity, "doc_id"),
+                "kb_id": _read_hit_value(hit, entity, "kb_id"),
+                "chunk_index": _read_hit_value(hit, entity, "chunk_index"),
+                "score": _normalize_cosine_score(float(getattr(hit, "score", 0.0) or 0.0)),
+                "raw_score": float(getattr(hit, "score", 0.0) or 0.0),
+            }
+        )
+    return child_chunks
 
-    return [
-        {"child_chunk_id": "cc_001", "parent_chunk_id": "pc_office_hours", "score": 0.92},
-        {"child_chunk_id": "cc_003", "parent_chunk_id": "pc_graduation_req", "score": 0.78},
-    ][:top_k]
+
+def _read_hit_value(hit: Any, entity: Any, field: str) -> Any:
+    if entity is not None:
+        try:
+            return entity.get(field)
+        except Exception:
+            pass
+    try:
+        return hit.get(field)
+    except Exception:
+        return None
+
+
+def _normalize_cosine_score(score: float) -> float:
+    if score < 0:
+        return 0.0
+    if score > 1:
+        return 1.0
+    return score

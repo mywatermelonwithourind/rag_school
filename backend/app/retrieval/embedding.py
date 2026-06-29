@@ -24,6 +24,8 @@ def embed_texts(texts: list[str], *, allow_fallback: bool = True) -> list[list[f
     """
     settings = get_settings()
     dim = embedding_dimension()
+    if not texts:
+        return []
 
     if settings.embedding_mock:
         if not allow_fallback:
@@ -39,6 +41,7 @@ def embed_texts(texts: list[str], *, allow_fallback: bool = True) -> list[list[f
                 base_url=settings.embedding_base_url,
                 dim=dim,
                 timeout_seconds=settings.embedding_timeout_seconds,
+                batch_size=settings.embedding_batch_size,
             )
         except Exception:
             if not allow_fallback:
@@ -74,27 +77,37 @@ def _embed_with_openai_compatible_api(
     base_url: str,
     dim: int,
     timeout_seconds: float,
+    batch_size: int,
 ) -> list[list[float]]:
     endpoint = f"{base_url.rstrip('/')}/embeddings"
-    payload: dict[str, Any] = {
-        "model": model,
-        "input": texts,
-        "dimensions": dim,
-    }
+    embeddings: list[list[float]] = []
+    resolved_batch_size = max(1, int(batch_size))
     with httpx.Client(timeout=timeout_seconds) as client:
-        response = client.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
-        data = response.json()
+        for start in range(0, len(texts), resolved_batch_size):
+            batch = texts[start : start + resolved_batch_size]
+            payload: dict[str, Any] = {
+                "model": model,
+                "input": batch,
+                "dimensions": dim,
+            }
+            response = client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            items = sorted(data.get("data", []), key=lambda item: item.get("index", 0))
+            batch_embeddings = [_validate_dim(item.get("embedding", []), dim) for item in items]
+            if len(batch_embeddings) != len(batch):
+                raise RuntimeError(
+                    f"Embedding API returned {len(batch_embeddings)} vectors for {len(batch)} inputs"
+                )
+            embeddings.extend(batch_embeddings)
 
-    items = sorted(data.get("data", []), key=lambda item: item.get("index", 0))
-    embeddings = [_validate_dim(item.get("embedding", []), dim) for item in items]
     if len(embeddings) != len(texts):
         raise RuntimeError(f"Embedding API returned {len(embeddings)} vectors for {len(texts)} inputs")
     return embeddings

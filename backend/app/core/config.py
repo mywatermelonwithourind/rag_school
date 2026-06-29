@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_timeout_seconds: float = Field(default=30.0, gt=0)
+    embedding_batch_size: int = Field(default=8, gt=0)
     embedding_mock: bool = True
 
     # ----- Rerank（qwen3-rerank） -----

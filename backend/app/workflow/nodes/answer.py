@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.core.config import get_settings
 from app.retrieval.pipeline import fetch_parent_chunks_by_ids
 from app.workflow.llm_client import generate_answer
 from app.workflow.state import AgentState, Citation, SourceChunk
@@ -23,16 +24,114 @@ def _score(source: SourceChunk) -> float:
     return float(source.get("score_rerank") or source.get("score_hybrid", 0.0))
 
 
-def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citation]:
-    return [
-        {
-            "parent_chunk_id": source["parent_chunk_id"],
-            "doc_id": source["doc_id"],
-            "snippet": source["content"][:120],
-            "relevance_score": _score(source),
-        }
-        for source in sources[:limit]
+def _display_name(source: SourceChunk) -> str:
+    metadata = source.get("metadata") or {}
+    return str(
+        metadata.get("title")
+        or metadata.get("source_name")
+        or metadata.get("source_path")
+        or source["doc_id"]
+    )
+
+
+def _compact_with_offsets(text: str) -> tuple[str, list[int]]:
+    compact_chars: list[str] = []
+    offsets: list[int] = []
+    for index, char in enumerate(text):
+        if char.isspace():
+            continue
+        compact_chars.append(char)
+        offsets.append(index)
+    return "".join(compact_chars), offsets
+
+
+def _locate_child_text(passage_text: str, child_text: str) -> list[int] | None:
+    if not passage_text or not child_text:
+        return None
+
+    exact_start = passage_text.find(child_text)
+    if exact_start >= 0:
+        return [exact_start, exact_start + len(child_text)]
+
+    compact_passage, passage_offsets = _compact_with_offsets(passage_text)
+    compact_child, _ = _compact_with_offsets(child_text)
+    if not compact_passage or not compact_child:
+        return None
+
+    compact_start = compact_passage.find(compact_child)
+    if compact_start < 0:
+        return None
+
+    compact_end = compact_start + len(compact_child) - 1
+    return [passage_offsets[compact_start], passage_offsets[compact_end] + 1]
+
+
+def _child_texts_and_offsets(source: SourceChunk) -> tuple[list[str], list[list[int]]]:
+    passage_text = source["content"]
+    child_hits = [
+        hit
+        for hit in (source.get("metadata") or {}).get("child_hits", [])
+        if isinstance(hit, dict)
     ]
+    child_texts: list[str] = []
+    offsets: list[list[int]] = []
+    seen_offsets: set[tuple[int, int]] = set()
+
+    for hit in sorted(child_hits, key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True):
+        child_text = str(hit.get("content") or "").strip()
+        if not child_text:
+            continue
+        child_texts.append(child_text)
+        located = _locate_child_text(passage_text, child_text)
+        if located is None:
+            continue
+        offset_key = (located[0], located[1])
+        if offset_key in seen_offsets:
+            continue
+        seen_offsets.add(offset_key)
+        offsets.append(located)
+
+    offsets.sort(key=lambda item: (item[0], item[1]))
+    return child_texts, offsets
+
+
+def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citation]:
+    settings = get_settings()
+    threshold = settings.rerank_display_threshold
+    citations: list[Citation] = []
+    seen_parent_ids: set[str] = set()
+
+    for source in sources:
+        parent_id = source["parent_chunk_id"]
+        if parent_id in seen_parent_ids:
+            continue
+        seen_parent_ids.add(parent_id)
+
+        rerank_score = source.get("score_rerank")
+        score = _score(source)
+        if rerank_score is not None and float(rerank_score) < threshold:
+            continue
+
+        child_texts, child_offsets = _child_texts_and_offsets(source)
+        citations.append(
+            {
+                "parent_chunk_id": parent_id,
+                "doc_id": source["doc_id"],
+                "file_id": source["doc_id"],
+                "file_name": _display_name(source),
+                "passage_text": source["content"],
+                "child_text": child_texts[0] if child_texts else "",
+                "child_texts": child_texts,
+                "child_offsets": child_offsets,
+                "snippet": source["content"][:120],
+                "relevance_score": score,
+                "rerank_score": float(rerank_score) if rerank_score is not None else None,
+            }
+        )
+        if len(citations) >= limit:
+            break
+
+    return citations
 
 
 def answer_node(state: AgentState) -> AgentState:

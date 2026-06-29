@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     sibling_boost: float = 0.05
     min_score_threshold: float = 0.35
     faq_match_threshold: float = 0.85
+    rerank_display_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
 
     # ----- CORS（前端本地开发） -----
     cors_origins: list[str] = ["http://localhost:3000"]

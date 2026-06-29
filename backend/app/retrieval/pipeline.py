@@ -160,6 +160,8 @@ def _child_hit_summary(
     return {
         "child_chunk_id": str(hit.get("child_chunk_id") or ""),
         "parent_chunk_id": str(hit.get("parent_chunk_id") or ""),
+        "content": str(hit.get("content") or ""),
+        "chunk_index": hit.get("chunk_index"),
         "score": score,
         "weighted_score": _clamp_score(score * query_weight),
         "retrieval_query": query,

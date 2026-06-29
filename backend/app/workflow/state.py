@@ -72,8 +72,15 @@ Citation = TypedDict(
     {
         "parent_chunk_id": str,
         "doc_id": str,
+        "file_id": str,
+        "file_name": str,
+        "passage_text": str,
+        "child_text": str,
+        "child_texts": list[str],
+        "child_offsets": list[list[int]],
         "snippet": str,
         "relevance_score": float,
+        "rerank_score": float | None,
     },
 )
 

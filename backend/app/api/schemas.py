@@ -13,8 +13,15 @@ class ChatRequest(BaseModel):
 class CitationSchema(BaseModel):
     parent_chunk_id: str
     doc_id: str
+    file_id: str | None = None
+    file_name: str | None = None
+    passage_text: str | None = None
+    child_text: str | None = None
+    child_texts: list[str] = Field(default_factory=list)
+    child_offsets: list[list[int]] = Field(default_factory=list)
     snippet: str
     relevance_score: float
+    rerank_score: float | None = None
 
 
 class ChatResponse(BaseModel):

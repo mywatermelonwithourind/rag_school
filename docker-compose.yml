@@ -113,6 +113,24 @@ services:
       timeout: 5s
       retries: 5
 
+  backend:
+    container_name: rag-backend
+    build: ./backend
+    networks:
+      - rag_net
+    env_file:
+      - ./backend/.env
+    environment:
+      RAG_MYSQL_HOST: mysql
+      RAG_MILVUS_HOST: milvus
+    ports:
+      - "8000:8000"
+    depends_on:
+      milvus:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
 networks:
   rag_net:
     driver: bridge

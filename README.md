@@ -131,6 +131,7 @@ preprocess → rule_match → query_route
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/documents` | 知识库文件列表 |
 | POST | `/api/chat` | 同步问答（调试） |
 | POST | `/api/chat/stream` | SSE 流式 |
 | POST | `/api/ingest/upload` | 上传本地文档并清洗入库 |
@@ -168,6 +169,7 @@ pip install -r requirements.txt
 
 python scripts/check_connectivity.py   # 先自检 MySQL/Milvus 连通
 python scripts/create_child_chunks_collection.py  # 首次使用前创建 Milvus 子向量 collection
+# 已有 MySQL 库若缺文件表，执行 docker/mysql/create_kb_document.sql
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -205,6 +207,7 @@ npm run dev
 
 见 `docker/mysql/init.sql`：
 
+- `kb_document` — 文件级元数据、入库状态、父/子块数量、向量数量
 - `parent_chunk` — 父块全文（FULLTEXT）
 - `faq_rule` — FAQ 标准问 + target_parent_chunk_ids + answer_mode
 - `faq_alias` — 别名 + match_type (exact/contains/regex)

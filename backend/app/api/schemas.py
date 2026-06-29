@@ -88,3 +88,52 @@ class KbDocumentSchema(BaseModel):
 class KbDocumentListResponse(BaseModel):
     total: int
     items: list[KbDocumentSchema] = Field(default_factory=list)
+
+
+class KbFileSummarySchema(BaseModel):
+    file_id: str
+    original_name: str
+    display_name: str
+    file_type: str
+    status: str
+    parent_count: int
+    child_count: int
+    character_count: int
+    ingested_at: str
+
+
+class KbFileChildSchema(BaseModel):
+    child_chunk_id: str
+    chunk_index: int
+    content: str
+
+
+class KbFileParentSchema(BaseModel):
+    parent_chunk_id: str
+    chunk_index: int
+    title: str
+    content: str
+    children: list[KbFileChildSchema] = Field(default_factory=list)
+
+
+class KbFileDetailSchema(KbFileSummarySchema):
+    full_text: str
+    reconstruction_notice: str
+    parents: list[KbFileParentSchema] = Field(default_factory=list)
+
+
+class KbFileListResponse(BaseModel):
+    total: int
+    items: list[KbFileSummarySchema] = Field(default_factory=list)
+
+
+class KbFileStorageCountSchema(BaseModel):
+    parent_count: int
+    vector_count: int
+
+
+class KbFileDeleteResponse(BaseModel):
+    file_id: str
+    status: str
+    before: KbFileStorageCountSchema
+    after: KbFileStorageCountSchema

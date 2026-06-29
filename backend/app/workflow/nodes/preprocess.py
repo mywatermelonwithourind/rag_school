@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.utils import normalize_text
+from app.query_understanding.history_resolver import resolve_followup
 from app.workflow.state import AgentState
 
 
@@ -24,18 +25,31 @@ def preprocess_node(state: AgentState) -> AgentState:
     TODO(workflow): 从 history 提取上一轮主题写入 session_context
     """
     question = state.get("question", "")
-    normalized = normalize_text(question)
+    history = state.get("history", [])
 
-    session_context = state.get("session_context") or {
-        "last_topic": None,
-        "turn_count": len(state.get("history", [])),
-    }
+    resolution = resolve_followup(question, history)
+    standalone_question = normalize_text(resolution["standalone_question"])
+    working_question = resolution["standalone_question"] if resolution["history_used"] else question
+    normalized = normalize_text(working_question)
+
+    session_context = dict(state.get("session_context") or {})
+    session_context.setdefault("last_topic", None)
+    session_context["turn_count"] = len(history)
+    session_context.update(
+        {
+            "standalone_question": standalone_question,
+            "history_used": resolution["history_used"],
+            "history_anchor": resolution["history_anchor"],
+            "history_strategy": resolution["history_strategy"],
+        }
+    )
 
     trace = list(state.get("debug_trace", []))
-    trace.append("preprocess")
+    trace.append(f"preprocess:history_strategy={resolution['history_strategy']}")
 
     return {
         **state,
+        "raw_question": question,
         "normalized_question": normalized,
         "session_context": session_context,
         "debug_trace": trace,

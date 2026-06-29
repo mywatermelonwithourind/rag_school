@@ -106,6 +106,9 @@ class AgentState(TypedDict, total=False):
     question: str
     """用户当前轮原始问题。writer: api | readers: 全部节点"""
 
+    raw_question: str
+    """preprocess 锁定的用户原始问题。writer: preprocess | readers: audit/debug"""
+
     history: list[HistoryMessage]
     """多轮对话历史（不含当前 question）。writer: api | readers: preprocess, executor, answer"""
 

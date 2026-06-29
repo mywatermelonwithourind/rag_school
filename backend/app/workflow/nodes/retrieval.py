@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.retrieval.pipeline import run_retrieval
 from app.workflow.state import AgentState
+
+logger = logging.getLogger(__name__)
 
 
 def retrieval_node(state: AgentState) -> AgentState:
@@ -27,6 +31,7 @@ def retrieval_node(state: AgentState) -> AgentState:
     """
     plan = state.get("retrieval_plan") or {}
     queries = state.get("retrieval_queries") or []
+    logger.info("retrieval input queries=%s", queries)
 
     sources, sufficient = run_retrieval(queries=queries, plan=plan)
 

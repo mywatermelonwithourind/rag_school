@@ -15,6 +15,9 @@ export interface Citation {
   doc_id: string;
   file_id?: string | null;
   file_name?: string | null;
+  full_text?: string | null;
+  highlight_offsets?: number[][];
+  reconstruction_notice?: string | null;
   passage_text?: string | null;
   child_text?: string | null;
   child_texts?: string[];
@@ -51,7 +54,7 @@ const T = {
   code: "\u4ee3\u7801",
   referenceDetail: "\u53c2\u8003\u539f\u6587",
   close: "\u5173\u95ed",
-  noHighlight: "\u672a\u5b9a\u4f4d\u5230\u547d\u4e2d\u7247\u6bb5\uff0c\u5df2\u5c55\u793a\u5b8c\u6574\u6bb5\u843d\u3002",
+  noHighlight: "\u672a\u5b9a\u4f4d\u5230\u547d\u4e2d\u7247\u6bb5\uff0c\u5df2\u5c55\u793a\u5b8c\u6574\u6587\u4ef6\u3002",
   noPassage: "\u6682\u65e0\u53ef\u5c55\u793a\u7684\u539f\u6587\u3002",
   score: "\u76f8\u5173\u5ea6",
 };
@@ -169,8 +172,9 @@ function fallbackRangesFromChildText(passageText: string, childTexts: string[]):
 }
 
 function highlightRangesForCitation(citation: Citation): HighlightRange[] {
-  const passageText = citation.passage_text ?? "";
-  const offsetRanges = normalizeRanges(citation.child_offsets, passageText.length);
+  const passageText = citation.full_text || citation.passage_text || "";
+  const primaryOffsets = citation.highlight_offsets?.length ? citation.highlight_offsets : citation.child_offsets;
+  const offsetRanges = normalizeRanges(primaryOffsets, passageText.length);
   if (offsetRanges.length > 0) return offsetRanges;
 
   const childTexts = citation.child_texts?.length
@@ -213,11 +217,13 @@ function HighlightedPassage({ text, ranges, firstHighlightRef }: { text: string;
 function CitationModal({ citation, onClose }: { citation: Citation; onClose: () => void }) {
   const firstHighlightRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const passageText = citation.passage_text || citation.snippet || "";
+  const passageText = citation.full_text || citation.passage_text || citation.snippet || "";
   const ranges = highlightRangesForCitation(citation);
   const title = citation.file_name || citation.doc_id;
+  const citationKey = citation.file_id || citation.doc_id || citation.parent_chunk_id;
 
   useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
     window.setTimeout(() => {
       if (firstHighlightRef.current) {
         firstHighlightRef.current.scrollIntoView({ block: "center" });
@@ -225,7 +231,7 @@ function CitationModal({ citation, onClose }: { citation: Citation; onClose: () 
         scrollRef.current?.scrollTo({ top: 0 });
       }
     }, 0);
-  }, [citation.parent_chunk_id]);
+  }, [citationKey, citation.highlight_offsets, citation.child_offsets]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -244,7 +250,7 @@ function CitationModal({ citation, onClose }: { citation: Citation; onClose: () 
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{T.referenceDetail}</p>
             <h3 className="mt-1 break-words text-lg font-semibold leading-7 text-slate-950">{title}</h3>
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              {citation.parent_chunk_id}
+              {citation.file_id || citation.doc_id}
               {typeof citation.rerank_score === "number" && ` · ${T.score} ${citation.rerank_score.toFixed(3)}`}
             </p>
           </div>
@@ -253,6 +259,7 @@ function CitationModal({ citation, onClose }: { citation: Citation; onClose: () 
           </button>
         </header>
         <div ref={scrollRef} className="overflow-y-auto px-5 py-5">
+          {citation.reconstruction_notice && <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 ring-1 ring-amber-100">{citation.reconstruction_notice}</p>}
           {ranges.length === 0 && <p className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">{T.noHighlight}</p>}
           <HighlightedPassage text={passageText} ranges={ranges} firstHighlightRef={firstHighlightRef} />
         </div>
@@ -516,7 +523,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
                       {msg.citations.map((c, i) => (
                         <button
-                          key={`${c.parent_chunk_id}-${i}`}
+                          key={`${c.file_id || c.doc_id || c.parent_chunk_id}-${i}`}
                           type="button"
                           onClick={() => setSelectedCitation(c)}
                           className="rounded-lg border border-[#e5e7eb] bg-white px-3 py-2 text-left text-sm leading-6 text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"

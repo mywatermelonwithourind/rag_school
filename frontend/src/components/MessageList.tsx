@@ -316,10 +316,8 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
               <MarkdownContent content={msg.content} streaming={msg.streaming} />
 
               {msg.streaming && msg.content && (
-                <span className="mt-4 inline-flex items-center gap-1.5 pl-1 text-slate-400">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
+                <span className="mt-2 inline-flex h-6 items-center pl-1" aria-label={T.thinking}>
+                  <span className="h-5 w-0.5 animate-pulse bg-slate-700" />
                 </span>
               )}
 

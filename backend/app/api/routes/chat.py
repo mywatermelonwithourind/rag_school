@@ -26,6 +26,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 HISTORY_TURN_LIMIT = 2
+STREAM_TOKEN_DELAY_SECONDS = 0.012
 
 
 def _build_initial_state(body: ChatRequest) -> AgentState:
@@ -111,6 +112,7 @@ async def chat_stream(body: ChatRequest):
         for token in stream_text(answer):
             payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
+            await asyncio.sleep(STREAM_TOKEN_DELAY_SECONDS)
 
         citations_payload = json.dumps(
             {"type": "citations", "content": final_state.get("citations", [])},

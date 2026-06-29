@@ -101,7 +101,7 @@ def _ingest_documents(
         if write_vectors and children:
             texts = [c["content"] for c in children]
             try:
-                embeddings = embed_texts(texts)
+                embeddings = embed_texts(texts, allow_fallback=False)
                 total_vector_upserts += upsert_child_chunks(children, embeddings)
             except Exception as exc:
                 message = f"{doc.get('doc_id')}: Milvus child chunk upsert skipped ({exc})"

@@ -14,17 +14,20 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def embed_texts(texts: list[str], *, allow_fallback: bool = True) -> list[list[float]]:
     """
     文本向量化。
 
-    优先调用 OpenAI-compatible embeddings API；当未配置或调用失败时，
-    降级为确定性本地向量，避免检索节点把用户请求打成 500。
+    优先调用 OpenAI-compatible embeddings API。检索链路默认允许降级为
+    确定性本地向量，避免用户请求打成 500；入库链路应传
+    allow_fallback=False，防止 mock/fallback 向量污染 Milvus。
     """
     settings = get_settings()
     dim = embedding_dimension()
 
     if settings.embedding_mock:
+        if not allow_fallback:
+            raise RuntimeError("Real embedding is required for ingestion, but RAG_EMBEDDING_MOCK=true")
         return [_deterministic_embedding(text, dim) for text in texts]
 
     if settings.embedding_api_key and settings.embedding_base_url:
@@ -38,7 +41,12 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 timeout_seconds=settings.embedding_timeout_seconds,
             )
         except Exception:
+            if not allow_fallback:
+                raise
             logger.exception("Embedding API failed; falling back to deterministic embeddings")
+
+    if not allow_fallback:
+        raise RuntimeError("Real embedding is required for ingestion, but API key or base URL is missing")
 
     return [_deterministic_embedding(text, dim) for text in texts]
 

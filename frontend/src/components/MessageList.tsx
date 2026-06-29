@@ -43,7 +43,7 @@ const T = {
   assistant: "\u5b66\u9662\u95ee\u7b54\u667a\u80fd\u4f53",
   emptyTitle: "\u6709\u4ec0\u4e48\u53ef\u4ee5\u5e2e\u4f60\uff1f",
   emptyDesc: "\u6211\u53ef\u4ee5\u57fa\u4e8e\u8ba1\u7b97\u673a\u5b66\u9662\u8d44\u6599\u56de\u7b54\u653f\u7b56\u3001\u6d41\u7a0b\u3001\u65f6\u95f4\u5b89\u6392\u548c\u5e38\u89c1\u95ee\u9898\u3002\u56de\u7b54\u7531 AI \u751f\u6210\uff0c\u8bf7\u4ed4\u7ec6\u7504\u522b\u3002",
-  thinking: "\u6b63\u5728\u751f\u6210...",
+  thinking: "\u6b63\u5728\u601d\u8003",
   referencesPrefix: "\u53c2\u8003",
   referencesSuffix: "\u6761\u8d44\u6599\u6765\u6e90",
   copy: "\u590d\u5236",
@@ -63,6 +63,13 @@ const defaultPrompts = [
   "\u8ba1\u7b97\u673a\u5b66\u9662\u529e\u516c\u65f6\u95f4\u662f\u4ec0\u4e48\uff1f",
   "\u6bd5\u4e1a\u5b66\u5206\u8981\u6c42\u662f\u591a\u5c11\uff1f",
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
+];
+
+const thinkingSteps = [
+  "\u6b63\u5728\u7406\u89e3\u95ee\u9898",
+  "\u6b63\u5728\u641c\u7d22\u77e5\u8bc6\u5e93",
+  "\u6b63\u5728\u6574\u7406\u76f8\u5173\u8d44\u6599",
+  "\u6b63\u5728\u751f\u6210\u56de\u7b54",
 ];
 
 function CopyIcon() {
@@ -387,8 +394,30 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   );
 }
 
+function ThinkingIndicator() {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setStep((current) => Math.min(current + 1, thinkingSteps.length - 1));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="flex h-8 items-center gap-3 text-sm text-slate-500" role="status" aria-live="polite">
+      <span key={step} className="animate-pulse">{thinkingSteps[step]}</span>
+      <span className="flex h-4 items-center gap-1" aria-hidden>
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-240ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-120ms]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" />
+      </span>
+    </div>
+  );
+}
+
 function MarkdownContent({ content, streaming }: { content: string; streaming?: boolean }) {
-  if (!content && streaming) return <p className="text-slate-500">{T.thinking}</p>;
+  if (!content && streaming) return <ThinkingIndicator />;
 
   const blocks = parseMarkdown(content);
   return (

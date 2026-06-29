@@ -11,7 +11,6 @@ const T = {
   subtitle: "\u9762\u5411\u5b66\u9662\u653f\u7b56\u3001\u6d41\u7a0b\u548c\u8d44\u6599\u7684\u667a\u80fd\u95ee\u7b54\u52a9\u624b \u00b7 \u5185\u5bb9\u7531 AI \u751f\u6210\uff0c\u8bf7\u4ed4\u7ec6\u7504\u522b",
   assistant: "\u5b66\u9662\u95ee\u7b54\u667a\u80fd\u4f53",
   newChat: "\u65b0\u5efa\u5bf9\u8bdd",
-  unifiedChat: "\u7edf\u4e00\u5bf9\u8bdd",
   knowledge: "\u77e5\u8bc6\u56fe\u8c31",
   search: "\u641c\u7d22\u4f1a\u8bdd",
   total: "\u4f1a\u8bdd\u603b\u6570",
@@ -50,7 +49,7 @@ const graphNodes = [
   "\u5e38\u89c1\u95ee\u9898",
 ];
 
-type IconName = "plus" | "chat" | "book" | "search" | "panel" | "edit" | "send" | "stop";
+type IconName = "plus" | "book" | "search" | "panel" | "edit" | "send" | "stop";
 type ActiveView = "chat" | "knowledge";
 
 interface Conversation {
@@ -122,8 +121,6 @@ function Icon({ name, className = "" }: { name: IconName; className?: string }) 
   switch (name) {
     case "plus":
       return <svg {...common}><path d="M12 5v14" /><path d="M5 12h14" /></svg>;
-    case "chat":
-      return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" /><path d="m9 12 2 2 4-5" /></svg>;
     case "book":
       return <svg {...common}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" /></svg>;
     case "search":
@@ -587,10 +584,6 @@ export default function ChatInterface() {
           )}
 
           <nav className="mt-2 space-y-1">
-            <button type="button" onClick={() => setActiveView("chat")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "chat" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
-              <Icon name="chat" className="h-6 w-6" />
-              {T.unifiedChat}
-            </button>
             <button type="button" onClick={() => setActiveView("knowledge")} className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-base font-medium text-black transition ${activeView === "knowledge" ? "bg-[#eeeeee]" : "hover:bg-[#f0f0f0]"}`}>
               <Icon name="book" className="h-6 w-6" />
               {T.knowledge}

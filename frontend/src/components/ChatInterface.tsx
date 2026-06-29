@@ -75,12 +75,35 @@ interface KbDocument {
   updated_at: string;
 }
 
+interface BackendSessionSummary {
+  session_id: string;
+  title: string;
+  updated_at: string;
+  turn_count: number;
+}
+
+interface BackendChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
+  created_at: string;
+}
+
+interface BackendSessionDetail extends BackendSessionSummary {
+  messages: BackendChatMessage[];
+}
+
 function uid() {
   return Math.random().toString(36).slice(2);
 }
 
 function titleFromQuestion(question: string) {
   return question.length > 22 ? `${question.slice(0, 22)}...` : question;
+}
+
+function timestampFromApi(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? Date.now() : timestamp;
 }
 
 function Icon({ name, className = "" }: { name: IconName; className?: string }) {
@@ -304,6 +327,89 @@ export default function ChatInterface() {
     setConversations((prev) => prev.map((conversation) => (conversation.id === conversationId ? updater(conversation) : conversation)));
   };
 
+  const loadConversationMessages = useCallback(async (conversationId: string, backendSessionId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/chat/sessions/${encodeURIComponent(backendSessionId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const detail = (await res.json()) as BackendSessionDetail;
+      const loadedMessages: Message[] = detail.messages.map((message, index) => ({
+        id: `${detail.session_id}-${index}`,
+        role: message.role,
+        content: message.content,
+        citations: message.role === "assistant" ? message.citations ?? [] : undefined,
+      }));
+
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.id === conversationId
+            ? {
+                ...conversation,
+                title: detail.title || conversation.title,
+                messages: loadedMessages,
+                backendSessionId: detail.session_id,
+                updatedAt: timestampFromApi(detail.updated_at),
+              }
+            : conversation
+        )
+      );
+    } catch (err) {
+      console.error("Failed to load chat session", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadSessions() {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/sessions`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const sessions = (await res.json()) as BackendSessionSummary[];
+        if (!alive) return;
+
+        const loadedConversations: Conversation[] = sessions.map((session) => ({
+          id: session.session_id,
+          title: session.title,
+          messages: [],
+          backendSessionId: session.session_id,
+          updatedAt: timestampFromApi(session.updated_at),
+        }));
+
+        setConversations((prev) => {
+          const byBackendSession = new Map(
+            prev
+              .filter((conversation) => conversation.backendSessionId)
+              .map((conversation) => [conversation.backendSessionId, conversation])
+          );
+          const restored = loadedConversations.map((conversation) => {
+            const existing = byBackendSession.get(conversation.backendSessionId);
+            return existing?.messages.length
+              ? { ...conversation, messages: existing.messages }
+              : conversation;
+          });
+          const localOnly = prev.filter((conversation) => !conversation.backendSessionId);
+          return [...localOnly, ...restored];
+        });
+
+        const latest = loadedConversations[0];
+        if (latest?.backendSessionId) {
+          setActiveConversationId((current) => current ?? latest.id);
+          await loadConversationMessages(latest.id, latest.backendSessionId);
+        }
+      } catch (err) {
+        console.error("Failed to load chat sessions", err);
+      }
+    }
+
+    void loadSessions();
+
+    return () => {
+      alive = false;
+    };
+  }, [loadConversationMessages]);
+
   const submitQuestion = useCallback(async (value?: string) => {
     const question = (value ?? input).trim();
     if (!question || loading) return;
@@ -440,10 +546,14 @@ export default function ChatInterface() {
 
   const openConversation = (conversationId: string) => {
     abortRef.current?.abort();
+    const conversation = conversations.find((item) => item.id === conversationId);
     setActiveConversationId(conversationId);
     setInput("");
     setLoading(false);
     setActiveView("chat");
+    if (conversation?.backendSessionId && conversation.messages.length === 0) {
+      void loadConversationMessages(conversationId, conversation.backendSessionId);
+    }
   };
 
   return (

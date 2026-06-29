@@ -312,7 +312,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
           const copyFailed = copyState[msg.id] === "failed";
 
           return (
-            <article key={msg.id} className="max-w-4xl rounded-2xl border border-[#e5e7eb] bg-[#eeeeee] px-5 py-4 text-slate-900 shadow-sm">
+            <article key={msg.id} className="max-w-4xl px-1 py-2 text-slate-900">
               <MarkdownContent content={msg.content} streaming={msg.streaming} />
 
               {msg.streaming && msg.content && (

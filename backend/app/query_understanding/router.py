@@ -18,6 +18,104 @@ ROUTING_PROMPT_CONSTRAINTS = """
 """
 
 
+COLLEGE_GUARD_TERMS = (
+    "学院",
+    "计算机",
+    "学分",
+    "课程",
+    "学籍",
+    "选课",
+    "转专业",
+    "毕业",
+    "办公",
+    "办公室",
+    "辅导员",
+    "教务",
+    "院长",
+    "老师",
+    "导师",
+    "手续",
+    "报名",
+    "考试",
+    "成绩",
+    "奖学金",
+    "助学金",
+    "宿舍",
+    "地址",
+    "电话",
+    "时间",
+    "材料",
+    "证明",
+    "流程",
+    "要求",
+    "规定",
+    "实习",
+    "实验室",
+)
+
+
+DIRECT_ANSWER_PHRASES = {
+    "你好",
+    "您好",
+    "hi",
+    "hello",
+    "谢谢",
+    "谢谢你",
+    "多谢",
+    "再见",
+    "拜拜",
+    "好的",
+    "好",
+    "收到",
+    "你叫什么名字",
+    "你是谁",
+    "你是什么",
+    "你能做什么",
+    "你会什么",
+    "讲个笑话",
+    "讲一个笑话",
+    "讲个故事",
+    "讲一个故事",
+    "好无聊",
+    "陪我聊天",
+    "聊聊天",
+    "今天天气不错",
+    "今天天气真好",
+    "今天天气很好",
+    "天气真好",
+    "天气不错",
+    "今天好热",
+    "今天好冷",
+    "今天真热",
+    "今天真冷",
+}
+
+DIRECT_ANSWER_PREFIXES = (
+    "今天天气",
+)
+
+
+def _has_college_guard_term(text: str) -> bool:
+    return any(term in text for term in COLLEGE_GUARD_TERMS)
+
+
+def _is_direct_answer_chat(text: str) -> bool:
+    if text in DIRECT_ANSWER_PHRASES:
+        return True
+    return any(text.startswith(prefix) and len(text) <= len(prefix) + 6 for prefix in DIRECT_ANSWER_PREFIXES)
+
+
+def _is_decompose_question(question: str) -> bool:
+    question_mark_count = question.count("?") + question.count("？")
+    if question_mark_count > 1:
+        return True
+    if question_mark_count >= 1 and any(
+        marker in question for marker in ("以及", "并且", "分别", "同时", "另外")
+    ):
+        return True
+    return any(marker in question for marker in ("分别介绍", "分别说明", "对比", "区别"))
+
+
 def classify_intent(
     question: str,
     history: list[HistoryMessage],
@@ -43,33 +141,18 @@ def classify_intent(
     compact = "".join(ch for ch in q if not ch.isspace())
     lowered = compact.lower().strip("。！？!?,，~～.；;：:")
 
-    # 寒暄 / 致谢 / 告别 → direct_answer（严格短句，避免业务问题误直答）
-    direct_answer_phrases = {
-        "你好",
-        "您好",
-        "hi",
-        "hello",
-        "谢谢",
-        "谢谢你",
-        "多谢",
-        "再见",
-        "拜拜",
-        "好的",
-        "好",
-        "收到",
-    }
-    if lowered in direct_answer_phrases:
+    # 学院关键词否决前置：只要像学院事务，禁止走闲聊直答。
+    if _has_college_guard_term(q):
+        if _is_decompose_question(q):
+            return "decompose"
+        return "rewrite"
+
+    # 寒暄 / 致谢 / 告别 / 窄匹配闲聊 → direct_answer。
+    if _is_direct_answer_chat(lowered):
         return "direct_answer"
 
     # 同轮多个独立问题 → decompose。仅对明确多问触发，普通“和/以及”不贸然拆。
-    question_mark_count = q.count("?") + q.count("？")
-    if question_mark_count > 1:
-        return "decompose"
-    if question_mark_count >= 1 and any(
-        marker in q for marker in ("以及", "并且", "分别", "同时", "另外")
-    ):
-        return "decompose"
-    if any(marker in q for marker in ("分别介绍", "分别说明", "对比", "区别")):
+    if _is_decompose_question(q):
         return "decompose"
 
     # 默认 rewrite（保守：宁可检索也不 direct_answer）

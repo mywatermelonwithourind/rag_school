@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     milvus_port: int = 19530
     milvus_collection: str = "child_chunks"
     milvus_dim: int = 1024  # BGE-large 维度，按实际模型调整
+    milvus_timeout_seconds: float = Field(default=10.0, gt=0)
 
     # ----- LLM（百炼 deepseek 直连） -----
     llm_api_key: str = ""
@@ -57,8 +58,11 @@ class Settings(BaseSettings):
 
     # ----- Embedding（BGE） -----
     embedding_model: str = "BAAI/bge-large-zh-v1.5"
+    embedding_dim: int = Field(default=1024, gt=0, description="Embedding 向量维度，必须与 Milvus 向量维度一致")
     embedding_api_key: str = ""
     embedding_base_url: str = ""
+    embedding_timeout_seconds: float = Field(default=30.0, gt=0)
+    embedding_batch_size: int = Field(default=8, gt=0)
     embedding_mock: bool = True
 
     # ----- Rerank（qwen3-rerank） -----

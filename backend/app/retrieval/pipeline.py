@@ -7,13 +7,20 @@ Milvus 子块召回 → MySQL 父块聚合 → 混合粗排 → qwen3-rerank 精
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from sqlalchemy import select
+
+from app.core.database import get_db_session
+from app.core.models import ParentChunkRecord
 from app.retrieval.embedding import embed_texts
 from app.retrieval.hybrid_ranker import hybrid_rank
 from app.retrieval.milvus_client import search_child_chunks
 from app.retrieval.reranker import rerank
 from app.workflow.state import FAQMatchResult, RetrievalPlan, SourceChunk
+
+logger = logging.getLogger(__name__)
 
 MIN_CHILD_CONFIDENCE = 0.2
 PARENT_CHILD_BEST_WEIGHT = 0.78
@@ -92,9 +99,45 @@ def _clamp_score(value: float) -> float:
 
 
 def _fetch_by_parent_ids(parent_ids: list[str]) -> list[SourceChunk]:
-    """从 mock / MySQL 按 parent_chunk_id 取父块全文。"""
-    # TODO(retrieval): SELECT content FROM parent_chunk WHERE parent_chunk_id IN (...)
-    return [_MOCK_PARENT_CHUNKS[pid] for pid in parent_ids if pid in _MOCK_PARENT_CHUNKS]
+    """从 MySQL 按 parent_chunk_id 取父块全文。"""
+    ordered_ids = [str(parent_id).strip() for parent_id in parent_ids if str(parent_id).strip()]
+    if not ordered_ids:
+        return []
+
+    try:
+        with get_db_session() as db:
+            records = db.scalars(
+                select(ParentChunkRecord).where(ParentChunkRecord.parent_chunk_id.in_(ordered_ids))
+            ).all()
+    except Exception:
+        logger.exception("Failed to load parent chunks from MySQL")
+        return []
+
+    records_by_id = {record.parent_chunk_id: record for record in records}
+    chunks: list[SourceChunk] = []
+    for parent_id in ordered_ids:
+        record = records_by_id.get(parent_id)
+        if record is None:
+            continue
+        chunks.append(
+            {
+                "parent_chunk_id": record.parent_chunk_id,
+                "child_chunk_id": None,
+                "content": record.content,
+                "doc_id": record.doc_id,
+                "kb_id": record.kb_id,
+                "score_vector": 0.0,
+                "score_lexical": 0.0,
+                "score_hybrid": 0.0,
+                "score_rerank": None,
+                "metadata": {
+                    **(record.meta or {}),
+                    "title": record.title,
+                    "chunk_index": record.chunk_index,
+                },
+            }
+        )
+    return chunks
 
 
 def fetch_parent_chunks_by_ids(parent_ids: list[str]) -> list[SourceChunk]:
@@ -322,17 +365,7 @@ def run_retrieval(
         query_count=query_count,
     )
     if not parent_candidates:
-        fallback_parent_ids = list(_MOCK_PARENT_CHUNKS.keys())[: plan.get("top_k_parent", 8)]
-        parent_candidates = [
-            {
-                "parent_chunk_id": parent_id,
-                "representative_child_chunk_id": _MOCK_PARENT_CHUNKS[parent_id].get("child_chunk_id"),
-                "child_hits": [],
-                "best_score": _MOCK_PARENT_CHUNKS[parent_id].get("score_vector", 0.0),
-                "weighted_child_score": _MOCK_PARENT_CHUNKS[parent_id].get("score_vector", 0.0),
-            }
-            for parent_id in fallback_parent_ids
-        ]
+        return [], False
 
     parents = _candidates_to_parent_chunks(parent_candidates[: plan.get("top_k_parent", 8)])
 

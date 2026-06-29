@@ -163,7 +163,7 @@ def _ingest_documents(
         if write_vectors and children:
             texts = [c["content"] for c in children]
             try:
-                embeddings = embed_texts(texts)
+                embeddings = embed_texts(texts, allow_fallback=False)
                 doc_vector_upserts = upsert_child_chunks(children, embeddings)
                 total_vector_upserts += doc_vector_upserts
             except Exception as exc:

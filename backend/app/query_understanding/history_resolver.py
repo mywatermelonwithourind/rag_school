@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
+import httpx
+from app.core.config import get_settings
 from app.core.utils import normalize_text
 from app.workflow.state import HistoryMessage
 
@@ -20,6 +24,33 @@ class FollowupResolution(TypedDict):
     history_used: bool
     history_anchor: str
     history_strategy: HistoryStrategy
+
+
+logger = logging.getLogger(__name__)
+
+
+LLM_TIMEOUT_SECONDS = 8.0
+LLM_MAX_HISTORY_MESSAGES = 4
+
+
+FOLLOWUP_SYSTEM_PROMPT = """
+你是对话追问改写器。你的任务是判断当前问题是否依赖最近对话历史，并在需要时把它改写成一个完整、可独立理解的问题。
+
+只输出 JSON，不要输出解释文字。JSON 格式:
+{"is_followup": boolean, "standalone_question": string, "anchor": string, "reason": string}
+
+铁律:
+1. 第一轮/无历史时，is_followup=false，standalone_question 原样返回。
+2. 当前问题本身已经完整、可独立理解的新问题时，is_followup=false，standalone_question 原样返回。例如“集美大学学分要求多少”“什么是递归”。
+3. 当前问题与上文无关、属于话题切换时，is_followup=false，standalone_question 原样返回。例如上文讲笑话，当前问“今天天气怎么样”。
+4. 只有当前问题短、含指代/省略、脱离上文无法理解时，才 is_followup=true。
+5. 改写只补全被省略的对象或语境，不要扩写，不要加入历史里没有的信息。
+6. 学院事务追问和日常闲聊追问都要处理。例:
+   - 历史用户问“毕业学分要求是什么”，当前“那转专业呢” -> “转专业的流程和要求是什么？”
+   - 历史用户问“讲个笑话”，当前“再讲一个” -> “再讲一个笑话”
+   - 历史用户问“办公室几点开”，当前“那地址呢” -> “办公室地址是什么？”
+7. anchor 填被继承的最近历史问题或主题；非追问时 anchor 为空字符串。
+"""
 
 
 WEAK_HISTORY_MESSAGES = {
@@ -145,38 +176,115 @@ def resolve_followup(
     question: str,
     history: list[HistoryMessage],
 ) -> FollowupResolution:
-    """把短追问/指代追问消解成独立检索问句。
+    """把短追问/指代追问消解成独立问句。
 
-    当前规则保持保守：
-    - 完整新问题不拼历史；
-    - 明显非学院主题不继承历史；
-    - 只有短追问或补槽型问句才继承最近可用 user anchor。
+    对外字段契约保持不变；内部使用一次轻量 LLM 判断+改写。
+    LLM 不可用、返回异常或无历史时，严格降级为 pass_through。
     """
     current = normalize_text(question)
-    anchor = find_usable_history_anchor(history)
-    if not current or not anchor:
+    if not current or not history:
         return _pass_through(current)
 
-    if is_obvious_non_college_topic(current) or is_self_contained_question(current):
+    payload = call_followup_llm(current, history)
+    if not payload:
         return _pass_through(current)
 
-    if is_referential_followup(current):
-        standalone = build_resolved_followup_query(anchor, current)
-        return _resolved(
-            standalone,
-            anchor=anchor,
-            strategy="reference_resolution",
-        )
-
-    if is_slot_followup(current):
-        standalone = compose_with_history_anchor(anchor, current)
-        return _resolved(
-            standalone,
-            anchor=anchor,
-            strategy="history_compose",
-        )
+    if bool(payload.get("is_followup")):
+        standalone = normalize_text(str(payload.get("standalone_question") or current))
+        anchor = normalize_text(str(payload.get("anchor") or ""))
+        if standalone and standalone != current:
+            return _resolved(
+                standalone,
+                anchor=anchor,
+                strategy="reference_resolution",
+            )
 
     return _pass_through(current)
+
+
+def call_followup_llm(question: str, history: list[HistoryMessage]) -> dict[str, Any] | None:
+    settings = get_settings()
+    if settings.llm_mock:
+        return None
+
+    messages = [
+        {"role": "system", "content": FOLLOWUP_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "history": recent_history_for_llm(history),
+                    "current_question": question,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    payload = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 256,
+        "stream": False,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        with httpx.Client(timeout=LLM_TIMEOUT_SECONDS) as client:
+            response = client.post(
+                f"{settings.llm_base_url.rstrip('/')}/chat/completions",
+                headers=_llm_headers(settings.llm_api_key),
+                json=payload,
+            )
+            response.raise_for_status()
+        content = (
+            ((response.json().get("choices") or [{}])[0].get("message") or {})
+            .get("content")
+        )
+        if not isinstance(content, str):
+            return None
+        return parse_llm_json(content)
+    except Exception:
+        logger.exception("History followup LLM rewrite failed; falling back to pass_through")
+        return None
+
+
+def recent_history_for_llm(history: list[HistoryMessage]) -> list[dict[str, str]]:
+    recent = history[-LLM_MAX_HISTORY_MESSAGES:]
+    return [
+        {"role": item["role"], "content": normalize_text(item["content"])}
+        for item in recent
+        if item.get("role") in {"user", "assistant"} and normalize_text(item.get("content", ""))
+    ]
+
+
+def _llm_headers(api_key: str) -> dict[str, str]:
+    if not api_key:
+        raise RuntimeError("RAG_LLM_API_KEY 为空，无法调用历史追问 LLM 改写")
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def parse_llm_json(content: str) -> dict[str, Any] | None:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def find_usable_history_anchor(history: list[HistoryMessage]) -> str:

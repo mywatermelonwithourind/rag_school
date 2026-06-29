@@ -74,8 +74,18 @@ DIRECT_ANSWER_PHRASES = {
     "你会什么",
     "讲个笑话",
     "讲一个笑话",
+    "再讲一个笑话",
+    "再讲个笑话",
+    "再来一个笑话",
+    "再来个笑话",
+    "继续讲笑话",
     "讲个故事",
     "讲一个故事",
+    "再讲一个故事",
+    "再讲个故事",
+    "再来一个故事",
+    "再来个故事",
+    "继续讲故事",
     "好无聊",
     "陪我聊天",
     "聊聊天",
@@ -95,12 +105,26 @@ DIRECT_ANSWER_PREFIXES = (
 )
 
 
+CHAT_FOLLOWUP_PREFIXES = (
+    "再讲",
+    "再来",
+    "继续讲",
+)
+
+CHAT_FOLLOWUP_TOPICS = (
+    "笑话",
+    "故事",
+)
+
+
 def _has_college_guard_term(text: str) -> bool:
     return any(term in text for term in COLLEGE_GUARD_TERMS)
 
 
 def _is_direct_answer_chat(text: str) -> bool:
     if text in DIRECT_ANSWER_PHRASES:
+        return True
+    if any(text.startswith(prefix) for prefix in CHAT_FOLLOWUP_PREFIXES) and any(topic in text for topic in CHAT_FOLLOWUP_TOPICS):
         return True
     return any(text.startswith(prefix) and len(text) <= len(prefix) + 6 for prefix in DIRECT_ANSWER_PREFIXES)
 

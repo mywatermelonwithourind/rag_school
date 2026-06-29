@@ -10,9 +10,9 @@ from app.workflow.state import AgentState, QueryIntent
 
 def _handle_rewrite(state: AgentState) -> list[str]:
     """
-    rewrite 分支：多轮指代消解改写。
+    rewrite 分支：产出检索 query。
 
-    TODO(query_understanding): LLM 改写 + 指代消解
+    历史指代消解已在 preprocess 统一完成；这里仅保留后续 LLM 查询改写扩展点。
     """
     question = state.get("normalized_question") or state.get("question", "")
     rewritten = rewrite_query(

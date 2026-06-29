@@ -1,7 +1,7 @@
 """轻量历史指代消解能力。
 
-本模块只提供纯函数，不接入当前 LangGraph 主链路。后续是否在 preprocess
-或 executor 中启用，由项目范围再决定。
+本模块只提供纯函数；当前由 preprocess 节点调用，负责在 rule_match / route
+之前生成本轮工作问题。
 """
 
 from __future__ import annotations
@@ -109,6 +109,7 @@ FOLLOWUP_MARKERS = (
 SLOT_MARKERS = (
     "材料",
     "证明",
+    "地址",
     "流程",
     "条件",
     "标准",
@@ -225,6 +226,8 @@ def is_referential_followup(text: str) -> bool:
     compact = compact_text(normalized)
     if any(marker in normalized for marker in ("刚才", "上面", "这个", "那个", "它", "这种情况")):
         return True
+    if extract_contrastive_followup_subject(normalized):
+        return True
     return compact in {compact_text(marker) for marker in FOLLOWUP_MARKERS}
 
 
@@ -238,8 +241,19 @@ def is_slot_followup(text: str) -> bool:
 def build_resolved_followup_query(anchor: str, followup: str) -> str:
     topic = anchor_topic_phrase(anchor)
     current = normalize_text(followup)
+    contrastive_subject = extract_contrastive_followup_subject(current)
+    if contrastive_subject:
+        if contrastive_subject == "地址":
+            return f"{topic}地址是什么？"
+        if "地址" in contrastive_subject:
+            return f"{contrastive_subject}是什么？"
+        if "转专业" in contrastive_subject:
+            return f"{contrastive_subject}的流程和要求是什么？"
+        return f"{contrastive_subject}的具体规定是什么？"
     if "材料" in current or "证明" in current:
         return f"{topic}需要哪些材料？"
+    if "地址" in current:
+        return f"{topic}地址是什么？"
     if "流程" in current or "办理" in current:
         return f"{topic}的办理流程是什么？"
     if "条件" in current:
@@ -275,11 +289,30 @@ def anchor_topic_phrase(anchor: str, max_len: int = 48) -> str:
         "怎么申请",
         "如何申请",
         "如何办理",
+        "几点开",
+        "几点开放",
+        "什么时候开",
+        "开放时间是什么",
+        "办公时间是什么",
     ):
         if topic.endswith(suffix):
             topic = topic[: -len(suffix)].strip()
             break
     return topic[:max_len].strip() or normalize_text(anchor)[:max_len]
+
+
+def extract_contrastive_followup_subject(text: str) -> str:
+    """提取“那转专业呢 / 那地址呢”一类口语追问里的新槽位。"""
+    normalized = normalize_text(text).rstrip("？?")
+    match = re.fullmatch(r"(?:那|那么|还有|另外)(?P<subject>[\w\u4e00-\u9fff]{1,16})呢?", normalized)
+    if not match:
+        return ""
+    subject = match.group("subject").strip().rstrip("呢吗呀啊")
+    if is_obvious_non_college_topic(subject):
+        return ""
+    if subject in {"这个", "那个", "它", "这件事", "这种情况"}:
+        return ""
+    return subject
 
 
 def compact_text(text: str) -> str:

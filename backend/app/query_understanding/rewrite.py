@@ -13,25 +13,15 @@ def rewrite_query(
     session_context: dict[str, Any],
 ) -> str:
     """
-    多轮指代消解改写。
+    rewrite 分支的轻量查询改写。
 
     TODO(query_understanding):
-        - LLM 结合 history + session_context 改写
-        - 处理"它/这个/上面说的"等指代
+        - LLM 结合当前工作问题与 session_context 改写检索 query
 
-    当前桩：若 history 非空，拼接上一轮用户问题前缀。
+    历史指代消解统一由 preprocess.resolve_followup 负责，本函数不再读取 history
+    拼接上一轮问题，避免二次消解污染检索 query。
     """
-    if not history:
-        return question
-
-    last_user = ""
-    for msg in reversed(history):
-        if msg["role"] == "user":
-            last_user = msg["content"]
-            break
-
-    if last_user and len(question) < 20:
-        return f"{last_user}；补充问：{question}"
+    del history, session_context
     return question
 
 

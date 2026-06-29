@@ -7,11 +7,16 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.api.schemas import ChatRequest, ChatResponse, CitationSchema
-from app.core.chat_history import load_recent_history, save_chat_turn
+from app.api.schemas import ChatRequest, ChatResponse, ChatSessionDetail, ChatSessionSummary, CitationSchema
+from app.core.chat_history import (
+    list_recent_sessions,
+    load_recent_history,
+    load_session_detail,
+    save_chat_turn,
+)
 from app.core.utils import new_session_id
 from app.workflow.graph import run_rag_pipeline
 from app.workflow.llm_client import stream_text
@@ -56,6 +61,22 @@ def _persist_completed_turn(state: AgentState) -> None:
         )
     except Exception:
         logger.exception("Failed to persist chat turn")
+
+
+@router.get("/sessions", response_model=list[ChatSessionSummary])
+async def chat_sessions(limit: int = 30):
+    """List recent persisted chat sessions for the sidebar."""
+    safe_limit = max(1, min(limit, 100))
+    return [ChatSessionSummary(**session) for session in list_recent_sessions(limit=safe_limit)]
+
+
+@router.get("/sessions/{session_id}", response_model=ChatSessionDetail)
+async def chat_session_detail(session_id: str):
+    """Load one persisted chat session with expanded messages."""
+    session = load_session_detail(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return ChatSessionDetail(**session)
 
 
 @router.post("", response_model=ChatResponse)

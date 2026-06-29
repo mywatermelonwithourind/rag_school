@@ -24,6 +24,24 @@ class ChatResponse(BaseModel):
     debug_trace: list[str] = Field(default_factory=list)
 
 
+class ChatMessageSchema(BaseModel):
+    role: str
+    content: str
+    citations: list[dict] = Field(default_factory=list)
+    created_at: str
+
+
+class ChatSessionSummary(BaseModel):
+    session_id: str
+    title: str
+    updated_at: str
+    turn_count: int
+
+
+class ChatSessionDetail(ChatSessionSummary):
+    messages: list[ChatMessageSchema] = Field(default_factory=list)
+
+
 class HealthResponse(BaseModel):
     status: str
     mysql: bool

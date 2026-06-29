@@ -15,6 +15,96 @@ from app.core.models import ChatConversationRecord
 from app.workflow.state import Citation, HistoryMessage
 
 
+def list_recent_sessions(limit: int = 30, scan_limit: int = 500) -> list[dict[str, Any]]:
+    """Return recent chat sessions summarized from stored turns."""
+    if limit <= 0:
+        return []
+
+    with get_db_session() as db:
+        records = list(
+            db.scalars(
+                select(ChatConversationRecord)
+                .order_by(
+                    ChatConversationRecord.created_at.desc(),
+                    ChatConversationRecord.id.desc(),
+                )
+                .limit(scan_limit)
+            )
+        )
+
+    grouped: dict[str, list[ChatConversationRecord]] = {}
+    for record in records:
+        grouped.setdefault(record.session_id, []).append(record)
+
+    sessions = []
+    for session_id, session_records in grouped.items():
+        ordered = sorted(session_records, key=lambda item: (item.created_at, item.id))
+        latest = max(session_records, key=lambda item: (item.created_at, item.id))
+        title_source = ordered[0].question if ordered else session_id
+        sessions.append(
+            {
+                "session_id": session_id,
+                "title": _title_from_question(title_source),
+                "updated_at": latest.created_at.isoformat(),
+                "turn_count": len(session_records),
+            }
+        )
+
+    sessions.sort(key=lambda item: item["updated_at"], reverse=True)
+    return sessions[:limit]
+
+
+def load_session_detail(session_id: str, limit: int = 100) -> dict[str, Any] | None:
+    """Load a persisted session and expand turns into user/assistant messages."""
+    if not session_id:
+        return None
+
+    with get_db_session() as db:
+        records = list(
+            db.scalars(
+                select(ChatConversationRecord)
+                .where(ChatConversationRecord.session_id == session_id)
+                .order_by(
+                    ChatConversationRecord.created_at.asc(),
+                    ChatConversationRecord.id.asc(),
+                )
+                .limit(limit)
+            )
+        )
+
+    if not records:
+        return None
+
+    messages: list[dict[str, Any]] = []
+    for record in records:
+        created_at = record.created_at.isoformat()
+        messages.append(
+            {
+                "role": "user",
+                "content": record.question,
+                "citations": [],
+                "created_at": created_at,
+            }
+        )
+        messages.append(
+            {
+                "role": "assistant",
+                "content": record.answer,
+                "citations": _jsonable(record.citations or []),
+                "created_at": created_at,
+            }
+        )
+
+    latest = records[-1]
+    return {
+        "session_id": session_id,
+        "title": _title_from_question(records[0].question),
+        "updated_at": latest.created_at.isoformat(),
+        "turn_count": len(records),
+        "messages": messages,
+    }
+
+
 def load_recent_history(session_id: str, limit: int) -> list[HistoryMessage]:
     """
     Load the latest N completed chat turns and expand them into user/assistant messages.
@@ -74,3 +164,8 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     return value
+
+
+def _title_from_question(question: str) -> str:
+    normalized = " ".join(question.strip().split())
+    return f"{normalized[:22]}..." if len(normalized) > 22 else normalized

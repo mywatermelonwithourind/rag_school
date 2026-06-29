@@ -23,6 +23,7 @@ COLLEGE_GUARD_TERMS = (
     "计算机",
     "学分",
     "课程",
+    "课",
     "学籍",
     "选课",
     "转专业",
@@ -31,6 +32,7 @@ COLLEGE_GUARD_TERMS = (
     "办公室",
     "辅导员",
     "教务",
+    "集美",
     "院长",
     "老师",
     "导师",
@@ -117,6 +119,67 @@ CHAT_FOLLOWUP_TOPICS = (
 )
 
 
+GENERAL_TECH_TERMS = (
+    "mysql",
+    "数据库",
+    "sql",
+    "python",
+    "java",
+    "javascript",
+    "js",
+    "typescript",
+    "ts",
+    "递归",
+    "算法",
+    "数据结构",
+    "链表",
+    "二叉树",
+    "树",
+    "栈",
+    "队列",
+    "哈希",
+    "哈希表",
+    "操作系统",
+    "网络",
+    "计算机网络",
+    "编译",
+    "编译原理",
+    "ai",
+    "人工智能",
+    "机器学习",
+    "深度学习",
+    "神经网络",
+    "大模型",
+    "llm",
+    "rag",
+    "向量数据库",
+    "向量检索",
+    "embedding",
+    "api",
+    "接口",
+    "前端",
+    "后端",
+    "linux",
+    "git",
+    "docker",
+    "redis",
+    "http",
+    "tcp",
+    "ip",
+)
+
+GENERAL_EXPLANATION_TERMS = (
+    "递归",
+    "二叉树",
+    "算法",
+    "数据库",
+    "人工智能",
+    "机器学习",
+    "操作系统",
+    "计算机网络",
+)
+
+
 def _has_college_guard_term(text: str) -> bool:
     return any(term in text for term in COLLEGE_GUARD_TERMS)
 
@@ -127,6 +190,35 @@ def _is_direct_answer_chat(text: str) -> bool:
     if any(text.startswith(prefix) for prefix in CHAT_FOLLOWUP_PREFIXES) and any(topic in text for topic in CHAT_FOLLOWUP_TOPICS):
         return True
     return any(text.startswith(prefix) and len(text) <= len(prefix) + 6 for prefix in DIRECT_ANSWER_PREFIXES)
+
+
+def _contains_general_tech_term(text: str) -> bool:
+    lowered = text.lower()
+    return any(term.lower() in lowered for term in GENERAL_TECH_TERMS)
+
+
+def _is_general_knowledge_question(text: str) -> bool:
+    lowered = text.lower()
+    if not _contains_general_tech_term(lowered):
+        return False
+
+    if lowered in {term.lower() for term in GENERAL_EXPLANATION_TERMS}:
+        return True
+    if lowered.endswith("是什么") and _contains_general_tech_term(lowered.removesuffix("是什么")):
+        return True
+    if lowered.startswith("什么是") and _contains_general_tech_term(lowered.removeprefix("什么是")):
+        return True
+    if lowered.startswith("怎么学") and _contains_general_tech_term(lowered.removeprefix("怎么学")):
+        return True
+    if lowered.startswith("如何学") and _contains_general_tech_term(lowered.removeprefix("如何学")):
+        return True
+    if lowered.endswith("怎么学") and _contains_general_tech_term(lowered.removesuffix("怎么学")):
+        return True
+    if lowered.endswith("怎么用") and _contains_general_tech_term(lowered.removesuffix("怎么用")):
+        return True
+    if lowered.endswith("如何使用") and _contains_general_tech_term(lowered.removesuffix("如何使用")):
+        return True
+    return False
 
 
 def _is_decompose_question(question: str) -> bool:
@@ -173,6 +265,10 @@ def classify_intent(
 
     # 寒暄 / 致谢 / 告别 / 窄匹配闲聊 → direct_answer。
     if _is_direct_answer_chat(lowered):
+        return "direct_answer"
+
+    # 通用知识 / 技术概念窄匹配 → direct_answer。学院词已在上方否决。
+    if _is_general_knowledge_question(lowered):
         return "direct_answer"
 
     # 同轮多个独立问题 → decompose。仅对明确多问触发，普通“和/以及”不贸然拆。

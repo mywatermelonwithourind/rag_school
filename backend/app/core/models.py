@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, JSON, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, JSON, String, Text, func
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -71,6 +71,64 @@ class KbDocumentRecord(Base):
         server_default=func.current_timestamp(),
         server_onupdate=func.current_timestamp(),
     )
+
+
+class FaqRuleRecord(Base):
+    """FAQ rule stored in MySQL and matched before regular retrieval."""
+
+    __tablename__ = "faq_rule"
+    __table_args__ = (Index("idx_enabled", "enabled"),)
+
+    faq_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    standard_question: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_parent_chunk_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    answer_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="parent_chunk_direct")
+    template_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        server_onupdate=func.current_timestamp(),
+    )
+
+    aliases: Mapped[list["FaqAliasRecord"]] = relationship(
+        back_populates="rule",
+        lazy="selectin",
+    )
+
+
+class FaqAliasRecord(Base):
+    """Alternative user wording for an FAQ rule."""
+
+    __tablename__ = "faq_alias"
+    __table_args__ = (
+        Index("idx_faq_id", "faq_id"),
+        Index("idx_alias", "alias_text"),
+    )
+
+    alias_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    faq_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("faq_rule.faq_id"),
+        nullable=False,
+    )
+    alias_text: Mapped[str] = mapped_column(String(512), nullable=False)
+    match_type: Mapped[str] = mapped_column(String(32), nullable=False, default="contains")
+    enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+
+    rule: Mapped[FaqRuleRecord] = relationship(back_populates="aliases")
 
 
 class ChatConversationRecord(Base):

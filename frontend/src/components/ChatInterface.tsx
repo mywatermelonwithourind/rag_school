@@ -4,7 +4,7 @@ import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useS
 import FileManager from "./FileManager";
 import MessageList, { Citation, Message } from "./MessageList";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
 const T = {
   sidebarTitle: "JMU_IT",
@@ -30,7 +30,7 @@ const T = {
   noRecent: "\u6682\u65e0\u5bf9\u8bdd\u8bb0\u5f55",
 };
 
-const seedPrompts = [
+const defaultSeedPrompts = [
   "\u8ba1\u7b97\u673a\u5b66\u9662\u529e\u516c\u65f6\u95f4\u662f\u4ec0\u4e48\uff1f",
   "\u6bd5\u4e1a\u5b66\u5206\u8981\u6c42\u662f\u591a\u5c11\uff1f",
   "\u5b66\u9662\u6709\u54ea\u4e9b\u5e38\u89c1\u529e\u4e8b\u6d41\u7a0b\uff1f",
@@ -64,6 +64,11 @@ interface BackendChatMessage {
 
 interface BackendSessionDetail extends BackendSessionSummary {
   messages: BackendChatMessage[];
+}
+
+interface FaqSuggestion {
+  faq_id: string;
+  question: string;
 }
 
 function uid() {
@@ -118,6 +123,7 @@ export default function ChatInterface() {
   const [activeView, setActiveView] = useState<ActiveView>("chat");
   const [searchTerm, setSearchTerm] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [quickPrompts, setQuickPrompts] = useState(defaultSeedPrompts);
   const abortRef = useRef<AbortController | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -174,6 +180,26 @@ export default function ChatInterface() {
     }
   }, []);
 
+  const loadFaqSuggestions = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/faq/suggestions?limit=6`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = (await res.json()) as { items?: FaqSuggestion[] };
+      const questions = (payload.items ?? [])
+        .map((item) => item.question.trim())
+        .filter(Boolean);
+      if (questions.length > 0) {
+        setQuickPrompts((prev) => (
+          prev.length === questions.length && prev.every((item, index) => item === questions[index])
+            ? prev
+            : questions
+        ));
+      }
+    } catch (err) {
+      console.error("Failed to load FAQ suggestions", err);
+    }
+  }, []);
+
   useEffect(() => {
     let alive = true;
 
@@ -219,12 +245,17 @@ export default function ChatInterface() {
       }
     }
 
+    void loadFaqSuggestions();
     void loadSessions();
+    const faqTimer = window.setInterval(() => {
+      void loadFaqSuggestions();
+    }, 5000);
 
     return () => {
       alive = false;
+      window.clearInterval(faqTimer);
     };
-  }, [loadConversationMessages]);
+  }, [loadConversationMessages, loadFaqSuggestions]);
 
   const submitQuestion = useCallback(async (value?: string) => {
     const question = (value ?? input).trim();
@@ -352,20 +383,16 @@ export default function ChatInterface() {
   };
 
   const startNewChat = () => {
-    abortRef.current?.abort();
     setActiveConversationId(null);
     setInput("");
-    setLoading(false);
     setActiveView("chat");
     window.setTimeout(() => composerRef.current?.focus(), 0);
   };
 
   const openConversation = (conversationId: string) => {
-    abortRef.current?.abort();
     const conversation = conversations.find((item) => item.id === conversationId);
     setActiveConversationId(conversationId);
     setInput("");
-    setLoading(false);
     setActiveView("chat");
     if (conversation?.backendSessionId && conversation.messages.length === 0) {
       void loadConversationMessages(conversationId, conversation.backendSessionId);
@@ -454,7 +481,7 @@ export default function ChatInterface() {
           {activeView === "files" ? (
             <FileManager apiBase={API_BASE} />
           ) : (
-            <MessageList messages={messages} onPromptClick={(prompt) => void submitQuestion(prompt)} quickPrompts={seedPrompts} />
+            <MessageList messages={messages} onPromptClick={(prompt) => void submitQuestion(prompt)} quickPrompts={quickPrompts} />
           )}
 
           {activeView === "chat" && (

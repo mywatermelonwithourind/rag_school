@@ -18,8 +18,13 @@ from app.core.chat_history import (
     save_chat_turn,
 )
 from app.core.utils import new_session_id
+from app.retrieval.pipeline import fetch_parent_chunks_by_ids
 from app.workflow.graph import run_rag_pipeline
-from app.workflow.llm_client import stream_text
+from app.workflow.llm_client import generate_answer_stream, stream_text
+from app.workflow.nodes.answer import _build_direct_parent_citations, _format_faq_direct_answer
+from app.workflow.nodes.preprocess import preprocess_node
+from app.workflow.nodes.query_route import query_route_node
+from app.workflow.nodes.rule_match import rule_match_node
 from app.workflow.state import AgentState
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -64,6 +69,43 @@ def _persist_completed_turn(state: AgentState) -> None:
         logger.exception("Failed to persist chat turn")
 
 
+def _is_faq_direct_state(state: AgentState) -> bool:
+    return (
+        state.get("query_intent") == "direct_parent_chunk"
+        and bool((state.get("faq_match") or {}).get("matched"))
+    )
+
+
+def _stream_answer_tokens(state: AgentState) -> tuple[list[str], float]:
+    answer = state.get("answer", "")
+    return list(stream_text(answer)), STREAM_TOKEN_DELAY_SECONDS
+
+
+def _build_faq_stream_state(initial_state: AgentState) -> AgentState | None:
+    state = preprocess_node(initial_state)
+    state = rule_match_node(state)
+    state = query_route_node(state)
+    if not _is_faq_direct_state(state):
+        return None
+
+    faq_match = state.get("faq_match") or {}
+    sources = fetch_parent_chunks_by_ids(faq_match.get("target_parent_chunk_ids", []))
+    if not sources:
+        return {
+            **state,
+            "sources": [],
+            "answer": "",
+            "citations": [],
+            "debug_trace": [*list(state.get("debug_trace", [])), "answer:insufficient"],
+        }
+    return {
+        **state,
+        "sources": sources,
+        "citations": _build_direct_parent_citations(sources, limit=3),
+        "debug_trace": [*list(state.get("debug_trace", [])), "answer:faq_direct_stream"],
+    }
+
+
 @router.get("/sessions", response_model=list[ChatSessionSummary])
 async def chat_sessions(limit: int = 30):
     """List recent persisted chat sessions for the sidebar."""
@@ -105,14 +147,76 @@ async def chat_stream(body: ChatRequest):
         data: {"type":"citations","content":[...]}
         data: {"type":"done","session_id":"..."}
     """
-    final_state = run_rag_pipeline(_build_initial_state(body))
+    initial_state = _build_initial_state(body)
+    faq_stream_state = _build_faq_stream_state(initial_state)
+
+    if faq_stream_state is not None:
+        async def faq_event_generator() -> AsyncGenerator[str, None]:
+            sources = list(faq_stream_state.get("sources") or [])
+            full_answer = ""
+            if sources:
+                try:
+                    for token in generate_answer_stream(
+                        question=faq_stream_state.get("question", ""),
+                        history=faq_stream_state.get("history", []),
+                        sources=sources,
+                    ):
+                        full_answer += token
+                        payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
+                        yield f"data: {payload}\n\n"
+                        await asyncio.sleep(0)
+                except Exception:
+                    full_answer = _format_faq_direct_answer(
+                        sources,
+                        faq_stream_state.get("faq_match"),
+                    )
+                    for token in stream_text(full_answer):
+                        payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
+                        yield f"data: {payload}\n\n"
+                        await asyncio.sleep(STREAM_TOKEN_DELAY_SECONDS)
+
+            final_state = {
+                **faq_stream_state,
+                "answer": full_answer,
+            }
+            citations_payload = json.dumps(
+                {"type": "citations", "content": final_state.get("citations", [])},
+                ensure_ascii=False,
+            )
+            yield f"data: {citations_payload}\n\n"
+
+            done_payload = json.dumps(
+                {
+                    "type": "done",
+                    "session_id": final_state.get("session_id", ""),
+                    "debug_trace": final_state.get("debug_trace", []),
+                    "answer": full_answer,
+                },
+                ensure_ascii=False,
+            )
+            yield f"data: {done_payload}\n\n"
+            asyncio.create_task(asyncio.to_thread(_persist_completed_turn, final_state))
+
+        return StreamingResponse(
+            faq_event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    final_state = run_rag_pipeline(initial_state)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         answer = final_state.get("answer", "")
-        for token in stream_text(answer):
+        tokens, delay_seconds = _stream_answer_tokens(final_state)
+        for token in tokens:
             payload = json.dumps({"type": "token", "content": token}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
-            await asyncio.sleep(STREAM_TOKEN_DELAY_SECONDS)
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
 
         citations_payload = json.dumps(
             {"type": "citations", "content": final_state.get("citations", [])},

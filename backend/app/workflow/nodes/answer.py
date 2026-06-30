@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
+from sqlalchemy import select
+
 from app.core.config import get_settings
-from app.file_management.service import get_kb_file
+from app.core.database import get_db_session
+from app.core.models import KbDocumentRecord, ParentChunkRecord
 from app.retrieval.pipeline import fetch_parent_chunks_by_ids
 from app.workflow.llm_client import generate_answer
 from app.workflow.state import AgentState, Citation, SourceChunk
@@ -120,6 +125,110 @@ def _parent_offsets_from_file_detail(file_detail: dict) -> dict[str, int]:
     return offsets
 
 
+def _file_detail_from_mysql(file_id: str) -> dict:
+    """Build file detail from MySQL only, avoiding Milvus calls on FAQ direct path."""
+    with get_db_session() as db:
+        parents = list(
+            db.scalars(
+                select(ParentChunkRecord)
+                .where(ParentChunkRecord.doc_id == file_id)
+                .order_by(
+                    ParentChunkRecord.chunk_index,
+                    ParentChunkRecord.created_at,
+                    ParentChunkRecord.parent_chunk_id,
+                )
+            )
+        )
+        metadata = db.get(KbDocumentRecord, file_id)
+
+    full_text = "\n\n".join(parent.content for parent in parents)
+    title = (
+        metadata.title
+        if metadata is not None
+        else (parents[0].title if parents and parents[0].title else file_id)
+    )
+    return {
+        "display_name": title,
+        "full_text": full_text,
+        "reconstruction_notice": "非原始文件，由父块按序拼接还原",
+        "parents": [
+            {
+                "parent_chunk_id": parent.parent_chunk_id,
+                "content": parent.content,
+            }
+            for parent in parents
+        ],
+    }
+
+
+def _clean_faq_markdown(text: str) -> str:
+    cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    cleaned = re.sub(r"\\(?=\d+[.、])", "", cleaned)
+    cleaned = re.sub(r"^#\s*\*\*(.+?)\*\*", r"# \1", cleaned)
+    cleaned = re.sub(r"\*\*([一二三四五六七八九十]、[^*\n]{2,32})\*\*", r"\n\n## \1\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"(?<![#\n ])([一二三四五六七八九十]、\s*[^。\n]{2,32})", r"\n\n## \1\n", cleaned)
+    cleaned = re.sub(r"(?<![\n\d])(\d+[.、]\s*[^。\n:：]{2,28}[：:])", r"\n\n\1", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def _format_faq_direct_answer(sources: list[SourceChunk], faq_match: dict | None) -> str:
+    title = str((faq_match or {}).get("standard_question") or "").strip()
+    body_parts = [_clean_faq_markdown(source.get("content", "")) for source in sources]
+    body = "\n\n".join(part for part in body_parts if part).strip()
+    if not body:
+        return ""
+    if title and not body.startswith("#"):
+        return f"# {title}\n\n{body}"
+    return body
+
+
+def _build_direct_parent_citations(sources: list[SourceChunk], limit: int = 3) -> list[Citation]:
+    citations: list[Citation] = []
+    seen_files: set[str] = set()
+
+    for source in sources:
+        file_id = _source_file_id(source)
+        parent_id = str(source.get("parent_chunk_id") or "")
+        if not file_id or file_id in seen_files:
+            continue
+
+        file_detail = _file_detail_from_mysql(file_id)
+
+        full_text = str(file_detail.get("full_text") or "")
+        parent_starts = _parent_offsets_from_file_detail(file_detail)
+        parent_start = parent_starts.get(parent_id)
+        passage = str(source.get("content") or "")
+        highlight_offsets: list[list[int]] = []
+        if parent_start is not None and passage:
+            highlight_offsets.append([parent_start, parent_start + len(passage)])
+
+        citations.append(
+            {
+                "parent_chunk_id": parent_id,
+                "doc_id": file_id,
+                "file_id": file_id,
+                "file_name": _display_name(source),
+                "full_text": full_text,
+                "highlight_offsets": highlight_offsets,
+                "reconstruction_notice": str(file_detail.get("reconstruction_notice") or ""),
+                "passage_text": full_text,
+                "child_text": passage[:500],
+                "child_texts": [passage] if passage else [],
+                "child_offsets": highlight_offsets,
+                "snippet": passage[:120],
+                "relevance_score": 1.0,
+                "rerank_score": 1.0,
+            }
+        )
+        seen_files.add(file_id)
+        if len(citations) >= limit:
+            break
+
+    return citations
+
+
 def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citation]:
     settings = get_settings()
     threshold = settings.rerank_display_threshold
@@ -223,11 +332,20 @@ def answer_node(state: AgentState) -> AgentState:
                 faq_match.get("target_parent_chunk_ids", [])
             )
         if sources:
+            try:
+                answer = generate_answer(
+                    question=state.get("question", ""),
+                    history=state.get("history", []),
+                    sources=sources,
+                    insufficient=False,
+                )
+            except Exception:
+                answer = _format_faq_direct_answer(sources, faq_match)
             return {
                 **state,
                 "sources": sources,
-                "answer": sources[0]["content"],
-                "citations": _build_citations(sources, limit=3),
+                "answer": answer or sources[0]["content"],
+                "citations": _build_direct_parent_citations(sources, limit=3),
                 "debug_trace": _append_trace(state, "answer:faq_direct"),
             }
 

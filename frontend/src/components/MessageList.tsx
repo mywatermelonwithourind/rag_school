@@ -365,12 +365,32 @@ function renderInline(text: string): ReactNode[] {
   return nodes;
 }
 
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error("copy command failed");
+}
+
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
 
   const copyCode = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await copyText(code);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
@@ -460,7 +480,7 @@ export default function MessageList({ messages, onPromptClick, quickPrompts = de
 
   const copyMessage = async (id: string, content: string) => {
     try {
-      await navigator.clipboard.writeText(content);
+      await copyText(content);
       setCopyState((prev) => ({ ...prev, [id]: "copied" }));
     } catch {
       setCopyState((prev) => ({ ...prev, [id]: "failed" }));

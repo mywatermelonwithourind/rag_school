@@ -118,7 +118,7 @@ def _parent_offsets_from_file_detail(file_detail: dict) -> dict[str, int]:
     parents = file_detail.get("parents") or []
     for index, parent in enumerate(parents):
         if index > 0:
-            cursor += 2  # get_kb_file 使用 "\n\n" 拼接父块。
+            cursor += 2  # full_text 使用 "\n\n" 拼接父块。
         parent_id = str(parent.get("parent_chunk_id") or "")
         offsets[parent_id] = cursor
         cursor += len(str(parent.get("content") or ""))
@@ -247,7 +247,7 @@ def _build_citations(sources: list[SourceChunk], limit: int = 5) -> list[Citatio
             continue
 
         try:
-            file_detail = get_kb_file(file_id)
+            file_detail = _file_detail_from_mysql(file_id)
         except Exception:
             continue
 
